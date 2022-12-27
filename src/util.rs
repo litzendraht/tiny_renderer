@@ -1,15 +1,15 @@
-/// Vector2 storing f32
-#[derive(Debug, Clone, Copy)]
-pub struct Vector2f {
-    pub x: f32,
-    pub y: f32,
-}
-
 /// Vector2 storing 2 f32
 #[derive(Debug, Clone, Copy)]
 pub struct Vector2i {
     pub x: i32,
     pub y: i32,
+}
+
+/// Vector2 storing f32
+#[derive(Debug, Clone, Copy)]
+pub struct Vector2f {
+    pub x: f32,
+    pub y: f32,
 }
 
 /// Vector3 storing 3 f32
@@ -37,6 +37,28 @@ impl Vector3f {
             x: a.y * b.z - a.z * b.y, 
             y: a.z * b.x - a.x * b.z,
             z: a.x * b.y - a.y * b.x,
+        };
+    }
+}
+
+impl std::ops::Add<Vector2f> for Vector2f {
+    type Output = Vector2f;
+
+    fn add(self, _rhs: Vector2f) -> Vector2f {
+        return Vector2f {
+            x: self.x + _rhs.x,
+            y: self.y + _rhs.y,
+        };
+    }
+}
+
+impl std::ops::Mul<Vector2f> for f32 {
+    type Output = Vector2f;
+
+    fn mul(self, _rhs: Vector2f) -> Vector2f {
+        return Vector2f {
+            x: self * _rhs.x,
+            y: self * _rhs.y,
         };
     }
 }

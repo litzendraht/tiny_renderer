@@ -1,24 +1,29 @@
 use std::time;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
+use image;
 
 use show_image::{WindowOptions, ImageView, ImageInfo, event, create_window};
-use obj::{load_obj, Obj};
+use obj::raw::object::Polygon;
+use obj::raw::{parse_obj};
 
-use crate::util::{Vector2i, Vector3f};
-use crate::frame_scene::{FrameScene, Color};
+use crate::util::{Vector2i, Vector2f, Vector3f};
+use crate::scene::{Scene, Color};
 
+// @TRASH double definition
 const WHITE: Color = Color { r: 255, g: 255, b: 255, };
 const BLACK: Color = Color { r: 0,   g: 0,   b: 0,   };
 const RED: Color =   Color { r: 255, g: 0,   b: 0,   };
 const GREEN: Color = Color { r: 0,   g: 255, b: 0,   };
 const BLUE: Color =  Color { r: 0,   g: 0,   b: 255, };
 
+// @TODO redo asset_path to be an actual Path object somehow
 pub struct Context {
     pub width: u32,
     pub height: u32,
     pub print_fps: bool,
-    pub filename: String,
+    pub asset_path: String,
 }
 
 /// Helper, defining exit event to be an Escape key press.
@@ -36,11 +41,19 @@ fn is_exit_event(window_event: event::WindowEvent) -> bool {
 /// Actualy launches the window, showing images.
 /// Takes struct, defining execution context.
 pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
-    let mut frame_scene = FrameScene::new(context.width, context.height);
+    let mut scene = Scene::new(context.width, context.height);
     
-    let model: Obj = load_obj(BufReader::new(File::open(context.filename)?))?;
-    println!("Number of vertices - {}", model.vertices.len());
-    println!("Number of indices  - {}", model.indices.len());
+    let model_path = context.asset_path.clone() + "/model.obj";
+    let texture_path = context.asset_path.clone() + "/texture.tga";
+
+    println!("Loading model from: {}", model_path);
+    let model = parse_obj(BufReader::new(File::open(model_path)?))?;
+    println!("Number of vertices in a model: {}", model.positions.len());
+    println!("Number of polygons in a model: {}", model.polygons.len());
+
+    println!("Loading texture from: {}", texture_path);
+    let texture = image::open(texture_path)?.into_rgb8();
+    println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([context.width, context.height]),
@@ -55,33 +68,32 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
     let mut frame_counter: u32 = 0;
     while !exit {
         // Clearing z-buffer and resetting rendered data to (0, 0, 0).
-        frame_scene.clear();
+        scene.clear();
 
         let passed_time = time::Instant::now()
         .duration_since(time_begin)
         .as_secs_f32();
 
-        // Drawing all faces of the model.
-        for i in 0..model.indices.len() / 3 {
-            // @TRASH can't quite believe that I need to explicitly deref and cast to usize to just
-            // get an element of a vec.
-            let coord_a_index = *model.indices.get(3 * i + 0).unwrap() as usize;
-            let coord_b_index = *model.indices.get(3 * i + 1).unwrap() as usize;
-            let coord_c_index = *model.indices.get(3 * i + 2).unwrap() as usize;
+        // Drawing all polygons of the model.
+        for polygon in model.polygons.iter() {
+            let indices: &Vec<(usize, usize, usize)> = match polygon {
+                Polygon::PTN(indices) => indices,
+                _ => panic!("Encountered some garbage, while looking through polygons."),
+            };
             let a = Vector3f {
-                x: model.vertices.get(coord_a_index).unwrap().position[0],
-                y: model.vertices.get(coord_a_index).unwrap().position[1],
-                z: model.vertices.get(coord_a_index).unwrap().position[2],
+                x: model.positions.get(indices[0].0).unwrap().0,
+                y: model.positions.get(indices[0].0).unwrap().1,
+                z: model.positions.get(indices[0].0).unwrap().2,
             };
             let b = Vector3f {
-                x: model.vertices.get(coord_b_index).unwrap().position[0],
-                y: model.vertices.get(coord_b_index).unwrap().position[1],
-                z: model.vertices.get(coord_b_index).unwrap().position[2],
+                x: model.positions.get(indices[1].0).unwrap().0,
+                y: model.positions.get(indices[1].0).unwrap().1,
+                z: model.positions.get(indices[1].0).unwrap().2,
             };
             let c = Vector3f {
-                x: model.vertices.get(coord_c_index).unwrap().position[0],
-                y: model.vertices.get(coord_c_index).unwrap().position[1],
-                z: model.vertices.get(coord_c_index).unwrap().position[2],
+                x: model.positions.get(indices[2].0).unwrap().0,
+                y: model.positions.get(indices[2].0).unwrap().1,
+                z: model.positions.get(indices[2].0).unwrap().2,
             };
 
             // Calculating normal projection on the face.
@@ -91,13 +103,26 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
             // Backface culling.
             if normal_correction_coef > 0.0 {
                 normal_correction_coef /= face_normal.norm();
-                let normal_corrected_color = Color::blend(WHITE, BLACK, normal_correction_coef);
-                frame_scene.draw_triangle(a, b, c, normal_corrected_color);
+                // @TODO figure out, whu texture is upside down, lol? Why do I need to do 1 - y?
+                let uv_a = Vector2f {
+                    x: model.tex_coords.get(indices[0].1).unwrap().0,
+                    y: 1.0 - model.tex_coords.get(indices[0].1).unwrap().1,
+                };
+                let uv_b = Vector2f {
+                    x: model.tex_coords.get(indices[1].1).unwrap().0,
+                    y: 1.0 - model.tex_coords.get(indices[1].1).unwrap().1,
+                };
+                let uv_c = Vector2f {
+                    x: model.tex_coords.get(indices[2].1).unwrap().0,
+                    y: 1.0 - model.tex_coords.get(indices[2].1).unwrap().1,
+                };
+                // scene.draw_triangle(a, b, c, WHITE, normal_correction_coef);
+                scene.draw_triangle_textured(a, b, c, uv_a, uv_b, uv_c, &texture, normal_correction_coef);
             }
         }
 
-        let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), frame_scene.as_render_data());
-        // let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), frame_scene.as_depth_data());
+        let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), scene.as_render_data());
+        // let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), scene.as_depth_data());
         window.set_image("image", image_data)?;
 
         // Unloading all the garbage from event channel, that has piled up, looking for exit event.

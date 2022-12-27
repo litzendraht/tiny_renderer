@@ -1,5 +1,5 @@
 mod util;
-mod frame_scene;
+mod scene;
 mod app;
 
 const WIDTH: u32  = 800;
@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         print_fps: true,
-        filename: String::from("assets/african_head.obj"),
+        asset_path: String::from("assets/african_head"),
     };
 
     app::run(context)?;
