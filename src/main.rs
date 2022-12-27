@@ -1,5 +1,5 @@
 mod util;
-mod image;
+mod frame_scene;
 mod app;
 
 const WIDTH: u32  = 800;

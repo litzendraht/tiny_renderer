@@ -5,8 +5,8 @@ use std::io::BufReader;
 use show_image::{WindowOptions, ImageView, ImageInfo, event, create_window};
 use obj::{load_obj, Obj};
 
-use crate::util::{Coord, Vector2, Vector3};
-use crate::image::{Image, Color};
+use crate::util::{Vector2i, Vector3f};
+use crate::frame_scene::{FrameScene, Color};
 
 const WHITE: Color = Color { r: 255, g: 255, b: 255, };
 const BLACK: Color = Color { r: 0,   g: 0,   b: 0,   };
@@ -33,16 +33,10 @@ fn is_exit_event(window_event: event::WindowEvent) -> bool {
     return false;
 }
 
-/// Transformtaion of a float in \[-1.0, 1.0\] to the pixel image coordinate
-/// in range \[0, length - 1\].
-fn to_rasterized_coord(float_coord: f32, scale: u32) -> i32 {
-    return ((float_coord + 1.0) * ((scale - 1) as f32) / 2.0) as i32;
-}
-
 /// Actualy launches the window, showing images.
 /// Takes struct, defining execution context.
 pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
-    let mut image = Image::new(context.width, context.height);
+    let mut frame_scene = FrameScene::new(context.width, context.height);
     
     let model: Obj = load_obj(BufReader::new(File::open(context.filename)?))?;
     println!("Number of vertices - {}", model.vertices.len());
@@ -60,6 +54,9 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
     let mut frame_counter_time_begin = time::Instant::now();
     let mut frame_counter: u32 = 0;
     while !exit {
+        // Clearing z-buffer and resetting rendered data to (0, 0, 0).
+        frame_scene.clear();
+
         let passed_time = time::Instant::now()
         .duration_since(time_begin)
         .as_secs_f32();
@@ -71,47 +68,36 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
             let coord_a_index = *model.indices.get(3 * i + 0).unwrap() as usize;
             let coord_b_index = *model.indices.get(3 * i + 1).unwrap() as usize;
             let coord_c_index = *model.indices.get(3 * i + 2).unwrap() as usize;
-            let a = Vector3 {
+            let a = Vector3f {
                 x: model.vertices.get(coord_a_index).unwrap().position[0],
                 y: model.vertices.get(coord_a_index).unwrap().position[1],
                 z: model.vertices.get(coord_a_index).unwrap().position[2],
             };
-            let b = Vector3 {
+            let b = Vector3f {
                 x: model.vertices.get(coord_b_index).unwrap().position[0],
                 y: model.vertices.get(coord_b_index).unwrap().position[1],
                 z: model.vertices.get(coord_b_index).unwrap().position[2],
             };
-            let c = Vector3 {
+            let c = Vector3f {
                 x: model.vertices.get(coord_c_index).unwrap().position[0],
                 y: model.vertices.get(coord_c_index).unwrap().position[1],
                 z: model.vertices.get(coord_c_index).unwrap().position[2],
-            };            
-            let coord_a = Coord { 
-                x: to_rasterized_coord(a.x, context.width),
-                y: to_rasterized_coord(a.y, context.height),
-            };
-            let coord_b = Coord { 
-                x: to_rasterized_coord(b.x, context.width),
-                y: to_rasterized_coord(b.y, context.height),
-            };
-            let coord_c = Coord { 
-                x: to_rasterized_coord(c.x, context.width),
-                y: to_rasterized_coord(c.y, context.height),
             };
 
             // Calculating normal projection on the face.
-            let light_dir = Vector3 { x: 0.0, y: 0.0, z: 1.0 };  // Directed out of the screen(?).
-            let face_normal = Vector3::cross(b - a, c - a);
-            let mut normal_correction_coef = Vector3::dot(light_dir, face_normal);            
+            let light_dir = Vector3f { x: 0.0, y: 0.0, z: 1.0 };  // Directed to us from the screen.
+            let face_normal = Vector3f::cross(b - a, c - a);
+            let mut normal_correction_coef = Vector3f::dot(light_dir, face_normal);            
             // Backface culling.
             if normal_correction_coef > 0.0 {
                 normal_correction_coef /= face_normal.norm();
                 let normal_corrected_color = Color::blend(WHITE, BLACK, normal_correction_coef);
-                image.draw_triangle(coord_a, coord_b, coord_c, normal_corrected_color);
+                frame_scene.draw_triangle(a, b, c, normal_corrected_color);
             }
         }
 
-        let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), image.as_pixel_data());
+        let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), frame_scene.as_render_data());
+        // let image_data = ImageView::new(ImageInfo::rgb8(context.width, context.height), frame_scene.as_depth_data());
         window.set_image("image", image_data)?;
 
         // Unloading all the garbage from event channel, that has piled up, looking for exit event.
