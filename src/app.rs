@@ -68,15 +68,19 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
     let mut frame_counter_time_begin = time::Instant::now();
     let mut frame_counter: u32 = 0;
     while !exit {
-        // Clearing z-buffer and resetting rendered data to (0, 0, 0).
-        scene.clear();
-        scene.update_perspective();
-
         let passed_time = time::Instant::now()
         .duration_since(time_begin)
         .as_secs_f32();
 
-        // scene.set_camera_position(vector![0., 0., 5. - passed_time]);
+        // Clearing z-buffer and resetting rendered data to (0, 0, 0).
+        scene.clear();        
+
+        // let look_from = vector![0., 0., 1.];
+        let look_from = vector![1.0 * passed_time.sin(), 0., 1.0 * passed_time.cos()];
+        let look_at = vector![0., 0., 0.];
+        let up = vector![0., 1., 0.];
+
+        scene.prepare_transform(look_from, look_at, up);
 
         // Drawing all polygons of the model.
         for polygon in model.polygons.iter() {

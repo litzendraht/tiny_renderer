@@ -45,8 +45,11 @@ struct ScenePoint {
 pub struct Scene {
     width: u32,
     height: u32,
-    camera_position: Vector3<f32>,
-    perspective_matrix: Matrix4<f32>, 
+    model_matrix: Matrix4<f32>,
+    view_matrix: Matrix4<f32>,
+    projection_matrix: Matrix4<f32>,
+    viewport_matrix: Matrix4<f32>,
+    total_transform_matrix: Matrix4<f32>,  // Combined transform, applied to vertices to get final screen coordinates.
     z_buffer: Vec<f32>,    // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
     depth_data: Vec<u8>,   // Normalized values of the z-buffer for visualization.
     render_data: Vec<u8>,  // Storing flat array.
@@ -57,20 +60,31 @@ impl Scene {
     /// Pixel data format is assumed to be rgb8.
     pub fn new(width: u32, height: u32) -> Scene {
         let n_pixels = (width * height) as usize;
-        // @TODO camera position is hardcoded for now.
-        let camera_position = vector![0., 0., 5.];
-        let perspective_matrix = matrix![1., 0., 0., 0.;
-                                         0., 1., 0., 0.;
-                                         0., 0., 1., 0.;
-                                         0., 0., 0., 1.];
+        let model_matrix = Matrix4::<f32>::identity();
+        let view_matrix = Matrix4::<f32>::identity();
+        let projection_matrix = Matrix4::<f32>::identity();
+        // Viewport matrix depedns only on constants.
+        // Setting z-buffer resolution to 255.
+        // Redef for convenience.
+        let w = (width - 1) as f32;
+        let h = (height - 1) as f32;
+        let d = 255.;
+        let viewport_matrix = matrix![w / 2., 0.,     0.,     w / 2.;
+                                      0.,     h / 2., 0.,     h / 2.;
+                                      0.,     0.,     d / 2., d / 2.;
+                                      0.,     0.,     0.,     1.];
+        let total_transform_matrix = Matrix4::<f32>::identity();
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
         let depth_data: Vec<u8>  = vec![0; 3 * n_pixels];
         let render_data: Vec<u8> = vec![0; 3 * n_pixels];
         return Scene {
             width,
             height,
-            camera_position,
-            perspective_matrix,
+            model_matrix,
+            view_matrix,
+            projection_matrix,
+            viewport_matrix,
+            total_transform_matrix,
             z_buffer,
             depth_data,
             render_data,
@@ -99,8 +113,8 @@ impl Scene {
 
     /// Sets all rendered pixels data to (0, 0, 0) and clears z-buffer.
     pub fn clear(&mut self) {
-        let capacity = (self.width * self.height) as usize;
-        for i in 0..capacity {
+        let n_pixels = (self.width * self.height) as usize;
+        for i in 0..n_pixels {
             self.z_buffer[i] = f32::MIN;
             self.render_data[3 * i + 0] = 0;
             self.render_data[3 * i + 1] = 0;
@@ -108,18 +122,32 @@ impl Scene {
         }
     }
 
-    /// Setter for camera position.
-    pub fn set_camera_position(&mut self, position: Vector3<f32>) {
-        self.camera_position = position;
-    }
-
-    /// Recalculating perspective matrix based on the current camera position.
-    pub fn update_perspective(&mut self) {
-        let coef = -1. / self.camera_position.z;
-        self.perspective_matrix = matrix![1., 0., 0.,   0.;
-                                          0., 1., 0.,   0.;
-                                          0., 0., 1.,   0.;
-                                          0., 0., coef, 1.];
+    /// Recalculating model, view, projection and viewport matrices to be used when drawing primitives.
+    /// look_from is camera position, look_at defines directon.
+    pub fn prepare_transform(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
+        // New coordinate system around camera position, with z
+        let y = up.normalize();
+        let z = (look_from - look_at).normalize();
+        let x = up.cross(&z).normalize();        
+        self.model_matrix = matrix![x.x, x.y, x.z, 0.;
+                                    y.x, y.y, y.z, 0.;
+                                    z.x, z.y, z.z, 0.;
+                                    0.,  0.,  0.,  1.];
+        self.view_matrix = matrix![1., 0., 0., -look_from.x;
+                                   0., 1., 0., -look_from.y;
+                                   0., 0., 1., -look_from.z;
+                                   0., 0., 0., 1.];
+        // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
+        // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 work ok.
+        let coef = -1. / 5.0;
+        self.projection_matrix = matrix![1., 0., 0.,   0.;
+                                         0., 1., 0.,   0.;
+                                         0., 0., 1.,   0.;
+                                         0., 0., coef, 1.];
+        self.total_transform_matrix = self.viewport_matrix *
+                                      self.projection_matrix * 
+                                      self.model_matrix * 
+                                      self.view_matrix;
     }
 
     /// Checking if coordinate is in Scene bounds.
@@ -135,15 +163,9 @@ impl Scene {
 
     /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
     /// Applies perspective.
-    fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {
-        // Transformtaion of a float in \[-1.0, 1.0\] to the pixel image coordinate
-        // in range \[0, scale - 1\].
-        fn to_rasterized_coord(float_coord: f32, scale: u32) -> i32 {
-            return ((float_coord + 1.0) * ((scale - 1) as f32) / 2.0) as i32;
-        }
-        
+    fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {        
         let hom_v = vector![v.x, v.y, v.z, 1.];
-        let hom_transformed_v = self.perspective_matrix * hom_v;
+        let hom_transformed_v = self.total_transform_matrix * hom_v;
         let transformed_v = vector![
             hom_transformed_v.x / hom_transformed_v.w,
             hom_transformed_v.y / hom_transformed_v.w,
@@ -151,8 +173,8 @@ impl Scene {
         ];
 
         return ScenePoint {
-            x: to_rasterized_coord(transformed_v.x, self.width),
-            y: to_rasterized_coord(transformed_v.y, self.height),
+            x: transformed_v.x as i32,
+            y: transformed_v.y as i32,
             z: transformed_v.z,
         }
     }
