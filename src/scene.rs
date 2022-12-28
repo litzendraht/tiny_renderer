@@ -2,7 +2,7 @@ use std::cmp::{min, max};
 
 use image::{ImageBuffer, Rgb};
 use nalgebra as na;
-use na::{vector, Vector2, Vector3};
+use na::{vector, Vector2, Vector3, matrix, Matrix4};
 
 /// Struct, representing raw rgb8 pixel data.
 #[derive(Clone, Copy)]
@@ -45,7 +45,8 @@ struct ScenePoint {
 pub struct Scene {
     width: u32,
     height: u32,
-    camera_position: Vector3<f32>, 
+    camera_position: Vector3<f32>,
+    perspective_matrix: Matrix4<f32>, 
     z_buffer: Vec<f32>,    // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
     depth_data: Vec<u8>,   // Normalized values of the z-buffer for visualization.
     render_data: Vec<u8>,  // Storing flat array.
@@ -57,7 +58,11 @@ impl Scene {
     pub fn new(width: u32, height: u32) -> Scene {
         let n_pixels = (width * height) as usize;
         // @TODO camera position is hardcoded for now.
-        let camera_position = vector![0.0, 0.0, 5.0];
+        let camera_position = vector![0., 0., 5.];
+        let perspective_matrix = matrix![1., 0., 0., 0.;
+                                         0., 1., 0., 0.;
+                                         0., 0., 1., 0.;
+                                         0., 0., 0., 1.];
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
         let depth_data: Vec<u8>  = vec![0; 3 * n_pixels];
         let render_data: Vec<u8> = vec![0; 3 * n_pixels];
@@ -65,6 +70,7 @@ impl Scene {
             width,
             height,
             camera_position,
+            perspective_matrix,
             z_buffer,
             depth_data,
             render_data,
@@ -102,6 +108,20 @@ impl Scene {
         }
     }
 
+    /// Setter for camera position.
+    pub fn set_camera_position(&mut self, position: Vector3<f32>) {
+        self.camera_position = position;
+    }
+
+    /// Recalculating perspective matrix based on the current camera position.
+    pub fn update_perspective(&mut self) {
+        let coef = -1. / self.camera_position.z;
+        self.perspective_matrix = matrix![1., 0., 0.,   0.;
+                                          0., 1., 0.,   0.;
+                                          0., 0., 1.,   0.;
+                                          0., 0., coef, 1.];
+    }
+
     /// Checking if coordinate is in Scene bounds.
     fn coord_in_bounds(&self, v: Vector2<i32>) -> bool {
         if v.x > self.width as i32 {
@@ -114,16 +134,26 @@ impl Scene {
     }
 
     /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
+    /// Applies perspective.
     fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {
         // Transformtaion of a float in \[-1.0, 1.0\] to the pixel image coordinate
         // in range \[0, scale - 1\].
         fn to_rasterized_coord(float_coord: f32, scale: u32) -> i32 {
             return ((float_coord + 1.0) * ((scale - 1) as f32) / 2.0) as i32;
-}
+        }
+        
+        let hom_v = vector![v.x, v.y, v.z, 1.];
+        let hom_transformed_v = self.perspective_matrix * hom_v;
+        let transformed_v = vector![
+            hom_transformed_v.x / hom_transformed_v.w,
+            hom_transformed_v.y / hom_transformed_v.w,
+            hom_transformed_v.z / hom_transformed_v.w
+        ];
+
         return ScenePoint {
-            x: to_rasterized_coord(v.x, self.width),
-            y: to_rasterized_coord(v.y, self.height),
-            z: v.z,
+            x: to_rasterized_coord(transformed_v.x, self.width),
+            y: to_rasterized_coord(transformed_v.y, self.height),
+            z: transformed_v.z,
         }
     }
 
@@ -197,6 +227,7 @@ impl Scene {
     }
 
     /// Draw a triangle with vertices at specified coordiantes and filled with specified color.
+    // @CLEAN maybe delete it alltogether? Or integrate with textured version somehow.
     pub fn draw_triangle(&mut self, a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>, color: Color, normal_correction_coef: f32) {
         // Simple local bounding box struct for convenience.
         #[derive(Debug)]
@@ -326,8 +357,9 @@ impl Scene {
         let coord_b = vector![scene_point_b.x, scene_point_b.y];
         let coord_c = vector![scene_point_c.x, scene_point_c.y];
         let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
-        for i in bbox.ll.x..=bbox.ur.x {
-            for j in bbox.ll.y..=bbox.ur.y {
+        // Accounting for possibility that bbox can reach outside of the screen.
+        for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
+            for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
                 let coord_point = vector![i, j];
                 let barycentric_coord = to_barycentric_coord(coord_point, coord_a, coord_b, coord_c);
                 if barycentric_coord.x < 0.0 || barycentric_coord.y < 0.0 || barycentric_coord.z < 0.0 {

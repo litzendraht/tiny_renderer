@@ -1,16 +1,3 @@
-#[macro_export]
-macro_rules! matrix4f {
-    ( $( $x:expr ),* ) => {
-        {
-            let mut matrix = Vec::new();
-            $(
-                temp_vec.push($x);
-            )*
-            temp_vec
-        }
-    };
-}
-
 /// Vector2 storing 2 f32
 #[derive(Debug, Clone, Copy)]
 pub struct Vector2i {

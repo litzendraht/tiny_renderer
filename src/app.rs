@@ -70,10 +70,13 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
     while !exit {
         // Clearing z-buffer and resetting rendered data to (0, 0, 0).
         scene.clear();
+        scene.update_perspective();
 
         let passed_time = time::Instant::now()
         .duration_since(time_begin)
         .as_secs_f32();
+
+        // scene.set_camera_position(vector![0., 0., 5. - passed_time]);
 
         // Drawing all polygons of the model.
         for polygon in model.polygons.iter() {
