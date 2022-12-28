@@ -2,13 +2,14 @@ use std::time;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use image;
 
+use image;
 use show_image::{WindowOptions, ImageView, ImageInfo, event, create_window};
 use obj::raw::object::Polygon;
 use obj::raw::{parse_obj};
+use nalgebra as na;
+use na::vector;
 
-use crate::util::{Vector2i, Vector2f, Vector3f};
 use crate::scene::{Scene, Color};
 
 // @TRASH double definition
@@ -80,42 +81,42 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
                 Polygon::PTN(indices) => indices,
                 _ => panic!("Encountered some garbage, while looking through polygons."),
             };
-            let a = Vector3f {
-                x: model.positions.get(indices[0].0).unwrap().0,
-                y: model.positions.get(indices[0].0).unwrap().1,
-                z: model.positions.get(indices[0].0).unwrap().2,
-            };
-            let b = Vector3f {
-                x: model.positions.get(indices[1].0).unwrap().0,
-                y: model.positions.get(indices[1].0).unwrap().1,
-                z: model.positions.get(indices[1].0).unwrap().2,
-            };
-            let c = Vector3f {
-                x: model.positions.get(indices[2].0).unwrap().0,
-                y: model.positions.get(indices[2].0).unwrap().1,
-                z: model.positions.get(indices[2].0).unwrap().2,
-            };
+            let a = vector![
+                model.positions[indices[0].0].0,
+                model.positions[indices[0].0].1,
+                model.positions[indices[0].0].2
+            ];
+            let b = vector![
+                model.positions[indices[1].0].0,
+                model.positions[indices[1].0].1,
+                model.positions[indices[1].0].2
+            ];
+            let c = vector![
+                model.positions[indices[2].0].0,
+                model.positions[indices[2].0].1,
+                model.positions[indices[2].0].2
+            ];
 
             // Calculating normal projection on the face.
-            let light_dir = Vector3f { x: 0.0, y: 0.0, z: 1.0 };  // Directed to us from the screen.
-            let face_normal = Vector3f::cross(b - a, c - a);
-            let mut normal_correction_coef = Vector3f::dot(light_dir, face_normal);            
+            let light_dir = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
+            let face_normal = (b - a).cross(&(c - a));
+            let mut normal_correction_coef = light_dir.dot(&face_normal);            
             // Backface culling.
             if normal_correction_coef > 0.0 {
                 normal_correction_coef /= face_normal.norm();
                 // @TODO figure out, whu texture is upside down, lol? Why do I need to do 1 - y?
-                let uv_a = Vector2f {
-                    x: model.tex_coords.get(indices[0].1).unwrap().0,
-                    y: 1.0 - model.tex_coords.get(indices[0].1).unwrap().1,
-                };
-                let uv_b = Vector2f {
-                    x: model.tex_coords.get(indices[1].1).unwrap().0,
-                    y: 1.0 - model.tex_coords.get(indices[1].1).unwrap().1,
-                };
-                let uv_c = Vector2f {
-                    x: model.tex_coords.get(indices[2].1).unwrap().0,
-                    y: 1.0 - model.tex_coords.get(indices[2].1).unwrap().1,
-                };
+                let uv_a = vector![
+                    model.tex_coords[indices[0].1].0,
+                    1.0 - model.tex_coords[indices[0].1].1
+                ];
+                let uv_b = vector![
+                    model.tex_coords[indices[1].1].0,
+                    1.0 - model.tex_coords[indices[1].1].1
+                ];
+                let uv_c = vector![
+                    model.tex_coords[indices[2].1].0,
+                    1.0 - model.tex_coords[indices[2].1].1
+                ];
                 // scene.draw_triangle(a, b, c, WHITE, normal_correction_coef);
                 scene.draw_triangle_textured(a, b, c, uv_a, uv_b, uv_c, &texture, normal_correction_coef);
             }

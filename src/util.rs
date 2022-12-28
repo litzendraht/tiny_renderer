@@ -1,3 +1,16 @@
+#[macro_export]
+macro_rules! matrix4f {
+    ( $( $x:expr ),* ) => {
+        {
+            let mut matrix = Vec::new();
+            $(
+                temp_vec.push($x);
+            )*
+            temp_vec
+        }
+    };
+}
+
 /// Vector2 storing 2 f32
 #[derive(Debug, Clone, Copy)]
 pub struct Vector2i {
@@ -18,6 +31,37 @@ pub struct Vector3f {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+}
+
+/// Vector4 storing 4 f32
+#[derive(Debug, Clone, Copy)]
+pub struct Vector4f {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+/// Matrix4x4 storing 16 f32
+#[derive(Clone, Copy)]
+pub struct Matrix4f {
+    // @TRASH this is suffering.
+    pub xx: f32,
+    pub xy: f32,
+    pub xz: f32,
+    pub xw: f32,
+    pub yx: f32,
+    pub yy: f32,
+    pub yz: f32,
+    pub yw: f32,
+    pub zx: f32,
+    pub zy: f32,
+    pub zz: f32,
+    pub zw: f32,
+    pub wx: f32,
+    pub wy: f32,
+    pub wz: f32,
+    pub ww: f32,
 }
 
 impl Vector3f {
