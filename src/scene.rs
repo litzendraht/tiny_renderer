@@ -1,35 +1,16 @@
 use std::cmp::{min, max};
 
-use image::{ImageBuffer, Rgb};
+use obj::raw::RawObj;
+use obj::raw::object::Polygon;
+use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
 use na::{vector, Vector2, Vector3, matrix, Matrix4};
 
-/// Struct, representing raw rgb8 pixel data.
-#[derive(Clone, Copy)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-// @TRASH double definition
-const WHITE: Color = Color { r: 255, g: 255, b: 255, };
-const BLACK: Color = Color { r: 0,   g: 0,   b: 0,   };
-const RED:   Color = Color { r: 255, g: 0,   b: 0,   };
-const GREEN: Color = Color { r: 0,   g: 255, b: 0,   };
-const BLUE:  Color = Color { r: 0,   g: 0,   b: 255, };
-
-impl Color {
-    /// Get convex combination of two colors: t * c_1 + (1 - t) * c_2.
-    /// t is unrestricted.
-    pub fn blend(color_1: Color, color_2: Color, t: f32) -> Color {
-        return Color {
-            r: (t * color_1.r as f32 + (1.0 - t) * color_2.r as f32) as u8,
-            g: (t * color_1.g as f32 + (1.0 - t) * color_2.g as f32) as u8,
-            b: (t * color_1.b as f32 + (1.0 - t) * color_2.b as f32) as u8,
-        }
-    }
-}
+const WHITE: Vector3<u8> = vector![255, 255, 255];
+const BLACK: Vector3<u8> = vector![0,   0,   0];
+const RED:   Vector3<u8> = vector![255, 0,   0];
+const GREEN: Vector3<u8> = vector![0,   255, 0];
+const BLUE:  Vector3<u8> = vector![0,   0,   255];
 
 /// Point in a scene - x, y give pixel index and z gives distance to the camera.
 #[derive(Debug, Clone, Copy)]
@@ -39,40 +20,47 @@ struct ScenePoint {
     z: f32,
 }
 
+/// Utility for getting convex combination of 2 Vector3<u8>'s
+fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
+    return vector![
+        (t * color_1.x as f32 + (1. - t) * color_2.x as f32) as u8,
+        (t * color_1.y as f32 + (1. - t) * color_2.y as f32) as u8,
+        (t * color_1.z as f32 + (1. - t) * color_2.z as f32) as u8
+    ];
+}
+
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
 /// (0, 0) is the bottom left coordinate.
 pub struct Scene {
     width: u32,
     height: u32,
-    model_matrix: Matrix4<f32>,
-    view_matrix: Matrix4<f32>,
-    projection_matrix: Matrix4<f32>,
-    viewport_matrix: Matrix4<f32>,
-    total_transform_matrix: Matrix4<f32>,  // Combined transform, applied to vertices to get final screen coordinates.
-    z_buffer: Vec<f32>,    // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
-    depth_data: Vec<u8>,   // Normalized values of the z-buffer for visualization.
-    render_data: Vec<u8>,  // Storing flat array.
+    model: RawObj,
+    texture: RgbImage,
+    // Scene settings.
+    light_direction: Vector3<f32>,
+    // Combined transform, applied to vertices to get final screen coordinates.
+    total_transform_matrix: Matrix4<f32>,
+    // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
+    // Takes f32 values in [0, 255] for ease of debugging.
+    z_buffer: Vec<f32>,
+    // u8 vesrion of z-buffer directly passed to image_show.
+    depth_data: Vec<u8>,
+    // Storing flat array.
+    render_data: Vec<u8>,
 }
 
 impl Scene {
     /// Generates new Scene struct with specified width and height.
     /// Pixel data format is assumed to be rgb8.
-    pub fn new(width: u32, height: u32) -> Scene {
+    pub fn new(
+        width: u32, 
+        height: u32,
+        model: RawObj,
+        texture: RgbImage,
+    ) -> Scene {
+        let light_direction = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
         let n_pixels = (width * height) as usize;
-        let model_matrix = Matrix4::<f32>::identity();
-        let view_matrix = Matrix4::<f32>::identity();
-        let projection_matrix = Matrix4::<f32>::identity();
-        // Viewport matrix depedns only on constants.
-        // Setting z-buffer resolution to 255.
-        // Redef for convenience.
-        let w = (width - 1) as f32;
-        let h = (height - 1) as f32;
-        let d = 255.;
-        let viewport_matrix = matrix![w / 2., 0.,     0.,     w / 2.;
-                                      0.,     h / 2., 0.,     h / 2.;
-                                      0.,     0.,     d / 2., d / 2.;
-                                      0.,     0.,     0.,     1.];
         let total_transform_matrix = Matrix4::<f32>::identity();
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
         let depth_data: Vec<u8>  = vec![0; 3 * n_pixels];
@@ -80,10 +68,9 @@ impl Scene {
         return Scene {
             width,
             height,
-            model_matrix,
-            view_matrix,
-            projection_matrix,
-            viewport_matrix,
+            model,
+            texture,
+            light_direction,
             total_transform_matrix,
             z_buffer,
             depth_data,
@@ -92,23 +79,29 @@ impl Scene {
     }
     
     /// Get rendered scene as a slice of color values of size 3 * (number of pixels).
-    pub fn as_render_data(&self) -> &[u8] {
-        return &self.render_data[..];
+    /// Flips the image, so (0, 0) is the lower left corner.
+    pub fn render_data(&self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+        let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
+            self.width, self.height, self.render_data.clone()
+        ).unwrap();
+        image::imageops::flip_vertical_in_place(&mut buffer);
+        return buffer;
     }
 
     /// Get image, representing z-buffer values.
     /// Lazy in a sense, that color data for the image is calculated only if this call is made.
-    pub fn as_depth_data(&mut self) -> &[u8] {
-        let z_max = self.z_buffer.iter().fold(f32::MIN, |max_value, value| value.max(max_value));
-        let z_min = self.z_buffer.iter().fold(f32::MAX, |min_value, value| value.min(min_value));
-        let scale = z_max - z_min;
+    // @TODO figure out, why it doesn't want to work.
+    pub fn depth_data(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         for i in 0..self.z_buffer.len() {
-            let scaled_z = ((self.z_buffer[i] + z_min) / scale) * 255.0;
-            self.depth_data[3 * i + 0] = scaled_z as u8;
-            self.depth_data[3 * i + 1] = scaled_z as u8;
-            self.depth_data[3 * i + 2] = scaled_z as u8;
+            self.depth_data[3 * i + 0] = self.z_buffer[i] as u8;
+            self.depth_data[3 * i + 1] = self.z_buffer[i] as u8;
+            self.depth_data[3 * i + 2] = self.z_buffer[i] as u8;
         }
-        return &self.depth_data[..];
+        let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
+            self.width, self.height, self.depth_data.clone()
+        ).unwrap();
+        image::imageops::flip_vertical_in_place(&mut buffer);
+        return buffer;
     }
 
     /// Sets all rendered pixels data to (0, 0, 0) and clears z-buffer.
@@ -124,41 +117,40 @@ impl Scene {
 
     /// Recalculating model, view, projection and viewport matrices to be used when drawing primitives.
     /// look_from is camera position, look_at defines directon.
-    pub fn prepare_transform(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
+    pub fn prepare_camera(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
         // New coordinate system around camera position, with z
         let y = up.normalize();
         let z = (look_from - look_at).normalize();
         let x = up.cross(&z).normalize();        
-        self.model_matrix = matrix![x.x, x.y, x.z, 0.;
+        let model_matrix = matrix![x.x, x.y, x.z, 0.;
                                     y.x, y.y, y.z, 0.;
                                     z.x, z.y, z.z, 0.;
                                     0.,  0.,  0.,  1.];
-        self.view_matrix = matrix![1., 0., 0., -look_from.x;
+        let view_matrix = matrix![1., 0., 0., -look_from.x;
                                    0., 1., 0., -look_from.y;
                                    0., 0., 1., -look_from.z;
                                    0., 0., 0., 1.];
         // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
         // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 work ok.
         let coef = -1. / 5.0;
-        self.projection_matrix = matrix![1., 0., 0.,   0.;
+        let projection_matrix = matrix![1., 0., 0.,   0.;
                                          0., 1., 0.,   0.;
                                          0., 0., 1.,   0.;
                                          0., 0., coef, 1.];
-        self.total_transform_matrix = self.viewport_matrix *
-                                      self.projection_matrix * 
-                                      self.model_matrix * 
-                                      self.view_matrix;
-    }
-
-    /// Checking if coordinate is in Scene bounds.
-    fn coord_in_bounds(&self, v: Vector2<i32>) -> bool {
-        if v.x > self.width as i32 {
-            return false;
-        }
-        if v.y > self.height as i32 {
-            return false;
-        }
-        return true;
+        // Viewport matrix depedns only on constants.
+        // Setting z-buffer resolution to 255.
+        // Redef for convenience.
+        let w = (self.width - 1) as f32;
+        let h = (self.height - 1) as f32;
+        let d = 255.;
+        let viewport_matrix = matrix![w / 2., 0.,     0.,     w / 2.;
+                                    0.,     h / 2., 0.,     h / 2.;
+                                    0.,     0.,     d / 2., d / 2.;
+                                    0.,     0.,     0.,     1.];
+        self.total_transform_matrix = viewport_matrix *
+                                      projection_matrix * 
+                                      model_matrix * 
+                                      view_matrix;
     }
 
     /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
@@ -182,75 +174,16 @@ impl Scene {
     /// Sets Scene pixel to a color at specifed coordinate.
     /// 
     /// Assumes, that pixel data is rgb8.
-    pub fn set_pixel(&mut self, p: Vector2<i32>, color: Color) {
+    pub fn set_pixel(&mut self, p: Vector2<i32>, color: Vector3<u8>) {
         // Pixel data is rgb8, so we find the starting index of a 3-tuple and do 3 assignments.
         // @OPTI maybe I can set 3 values simultaneously somehow?
-        // @TODO do something with y inversion, seems very hacky here, maybe need to explicitly
-        // invert the image, when providing a slice in as_render_data.
-        let index = (3 * (p.x + (self.height as i32 - 1 - p.y) * self.width as i32)) as usize;
-        self.render_data[index + 0] = color.r;
-        self.render_data[index + 1] = color.g;
-        self.render_data[index + 2] = color.b;
+        let index = (3 * (p.x + p.y * self.width as i32)) as usize;
+        self.render_data[index + 0] = color.x;
+        self.render_data[index + 1] = color.y;
+        self.render_data[index + 2] = color.z;
     }
 
-    /// Draws a line between v_1 and v_2 coordinates with specified color
-    /// via Bresenham's algorithm as presented in https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
-    /// Draws line over anything, but consequent primitive draw calls can disrespct it, since z-buffer doesn't change.
-    // @CLEAN strange function, maybe need to standardize all draw functions to have z_buffer_ignore param.
-    pub fn draw_line_z_ignore(&mut self, a: Vector3<f32>, b: Vector3<f32>, color: Color) {
-        let scene_point_a = self.to_scene_point(a);
-        let scene_point_b = self.to_scene_point(b);
-        let mut x_0 = scene_point_a.x;
-        let x_1 = scene_point_b.x;
-        let mut y_0 = scene_point_a.y;
-        let y_1 = scene_point_b.y;
-        let dx: i32 = (x_1 - x_0).abs();
-        let sx: i8 = match x_0 < x_1 {
-            true  =>  1,
-            false => -1,
-        };
-        let dy: i32 = -(y_1 - y_0).abs();
-        let sy: i8 = match y_0 < y_1 {
-            true  =>  1,
-            false => -1,
-        };
-        let mut error: i32 = dx + dy;
-
-        let mut e2;
-        loop {
-            self.set_pixel(vector![x_0, y_0], color);
-            if (x_0 == x_1) && (y_0 == y_1) {
-                break;
-            }
-            e2 = 2 * error;
-            if e2 >= dy {
-                if x_0 == x_1 {
-                    break;
-                }
-                error += dy;
-                x_0 += sx as i32;
-            }
-            if e2 <= dx {
-                if y_1 == y_0 {
-                    break;
-                }
-                error += dx;
-                y_0 += sy as i32;
-            }
-        }
-    }
-
-    pub fn draw_point(&mut self, a: Vector3<f32>, color: Color) {
-        let scene_point = self.to_scene_point(a);
-        if scene_point.z > self.z_buffer[(scene_point.x + scene_point.y * self.width as i32) as usize] {
-            // Drawing over the point that is further away.
-            self.set_pixel(vector![scene_point.x, scene_point.y], color);
-        }
-    }
-
-    /// Draw a triangle with vertices at specified coordiantes and filled with specified color.
-    // @CLEAN maybe delete it alltogether? Or integrate with textured version somehow.
-    pub fn draw_triangle(&mut self, a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>, color: Color, normal_correction_coef: f32) {
+    pub fn render(&mut self) {
         // Simple local bounding box struct for convenience.
         #[derive(Debug)]
         struct BoundingBox {
@@ -259,7 +192,11 @@ impl Scene {
         }
 
         // Helper used to find bounding box of a triangle.
-        fn get_triangle_bounding_box(coord_a: Vector2<i32>, coord_b: Vector2<i32>, coord_c: Vector2<i32>) -> BoundingBox {
+        fn get_triangle_bounding_box(
+            coord_a: Vector2<i32>, 
+            coord_b: Vector2<i32>, 
+            coord_c: Vector2<i32>
+        ) -> BoundingBox {
             return BoundingBox {
                 ll: vector![
                     min(min(coord_a.x, coord_b.x), coord_c.x),
@@ -272,16 +209,22 @@ impl Scene {
             };
         }
 
-        fn to_barycentric_coord(coord_point: Vector2<i32>, coord_a: Vector2<i32>, coord_b: Vector2<i32>, coord_c: Vector2<i32>) -> Vector3<f32> {
+        // Getting barycentric coordinates for a point in relation to a triangle.
+        fn to_barycentric_coord(
+            coord_point: Vector2<i32>, 
+            coord_a: Vector2<i32>, 
+            coord_b: Vector2<i32>, 
+            coord_c: Vector2<i32>
+        ) -> Vector3<f32> {
             let raw_cross = vector![
-                (coord_b.x - coord_a.x) as f32,
-                (coord_c.x - coord_a.x) as f32,
-                (coord_a.x - coord_point.x) as f32
-            ].cross(&vector![
-                (coord_b.y - coord_a.y) as f32,
-                (coord_c.y - coord_a.y) as f32,
-                (coord_a.y - coord_point.y) as f32
-            ]);
+                    (coord_b.x - coord_a.x) as f32,
+                    (coord_c.x - coord_a.x) as f32,
+                    (coord_a.x - coord_point.x) as f32
+                ].cross(&vector![
+                    (coord_b.y - coord_a.y) as f32,
+                    (coord_c.y - coord_a.y) as f32,
+                    (coord_a.y - coord_point.y) as f32
+                ]);
             if raw_cross.z.abs() < 1.0 {
                 // Degenerate triangle, returning something with negative coordinate.
                 return vector![-1.0, 1.0, 1.0];
@@ -293,29 +236,95 @@ impl Scene {
             ];
         }
 
-        let scene_point_a = self.to_scene_point(a);
-        let scene_point_b = self.to_scene_point(b);
-        let scene_point_c = self.to_scene_point(c);
-        let coord_a = vector![scene_point_a.x, scene_point_a.y];
-        let coord_b = vector![scene_point_b.x, scene_point_b.y];
-        let coord_c = vector![scene_point_c.x, scene_point_c.y];
-        let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
-        for i in bbox.ll.x..=bbox.ur.x {
-            for j in bbox.ll.y..=bbox.ur.y {
-                let coord_point = vector![i, j];
-                let barycentric_coord = to_barycentric_coord(coord_point, coord_a, coord_b, coord_c);
-                if barycentric_coord.x < 0.0 || barycentric_coord.y < 0.0 || barycentric_coord.z < 0.0 {
-                    // If any of the coordinates are negative, point is not in the triangle, so skipping it.
-                    continue;
-                } else {
-                    let z_to_screen = scene_point_a.z * barycentric_coord.x + 
-                                      scene_point_b.z * barycentric_coord.y +
-                                      scene_point_c.z * barycentric_coord.z;
-                    let index = (i + j * self.width as i32) as usize;
-                    // Checking z-buffer, on success redrawing the pixel and updating the buffer.
-                    if z_to_screen > self.z_buffer[index] {
-                        self.z_buffer[index] = z_to_screen;
-                        self.set_pixel(coord_point, Color::blend(color, BLACK, normal_correction_coef));
+        // Drawing all polygons of the model.
+        for polygon in self.model.polygons.iter() {
+            let indices: &Vec<(usize, usize, usize)> = match polygon {
+                Polygon::PTN(indices) => indices,
+                _ => panic!("Encountered some garbage, while looking through polygons."),
+            };
+            let a = vector![
+                self.model.positions[indices[0].0].0,
+                self.model.positions[indices[0].0].1,
+                self.model.positions[indices[0].0].2
+            ];
+            let b = vector![
+                self.model.positions[indices[1].0].0,
+                self.model.positions[indices[1].0].1,
+                self.model.positions[indices[1].0].2
+            ];
+            let c = vector![
+                self.model.positions[indices[2].0].0,
+                self.model.positions[indices[2].0].1,
+                self.model.positions[indices[2].0].2
+            ];
+
+            // Calculating normal projection on the face.
+            let face_normal = (b - a).cross(&(c - a));
+            let mut normal_correction_coef = self.light_direction.dot(&face_normal);            
+            // Backface culling.
+            if normal_correction_coef > 0.0 {
+                normal_correction_coef /= face_normal.norm();
+                // @TODO figure out, whu texture is upside down, lol? Why do I need to do 1 - y?
+                let uv_a = vector![
+                    self.model.tex_coords[indices[0].1].0,
+                    1.0 - self.model.tex_coords[indices[0].1].1
+                ];
+                let uv_b = vector![
+                    self.model.tex_coords[indices[1].1].0,
+                    1.0 - self.model.tex_coords[indices[1].1].1
+                ];
+                let uv_c = vector![
+                    self.model.tex_coords[indices[2].1].0,
+                    1.0 - self.model.tex_coords[indices[2].1].1
+                ];
+                // scene.draw_triangle(a, b, c, WHITE, normal_correction_coef);
+                let scene_point_a = self.to_scene_point(a);
+                let scene_point_b = self.to_scene_point(b);
+                let scene_point_c = self.to_scene_point(c);
+                let coord_a = vector![scene_point_a.x, scene_point_a.y];
+                let coord_b = vector![scene_point_b.x, scene_point_b.y];
+                let coord_c = vector![scene_point_c.x, scene_point_c.y];
+                let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
+                // Accounting for possibility that bbox can reach outside of the screen.
+                for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
+                    for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
+                        let coord_point = vector![i, j];
+                        let barycentric_coord = to_barycentric_coord(coord_point, coord_a, coord_b, coord_c);
+                        if barycentric_coord.x < 0.0 || barycentric_coord.y < 0.0 || barycentric_coord.z < 0.0 {
+                            // If any of the coordinates are negative, point is not in the triangle, so skipping it.
+                            continue;
+                        } else {
+                            let z_to_screen = barycentric_coord.x * scene_point_a.z + 
+                                            barycentric_coord.y * scene_point_b.z +
+                                            barycentric_coord.z * scene_point_c.z;
+                            let index = (i + j * self.width as i32) as usize;
+                            // Checking z-buffer, on success redrawing the pixel and updating the buffer.
+                            if z_to_screen > self.z_buffer[index] {
+                                self.z_buffer[index] = z_to_screen;
+                                let point_uv = barycentric_coord.x * uv_a + 
+                                            barycentric_coord.y * uv_b + 
+                                            barycentric_coord.z * uv_c; 
+                                let texture_coord = vector![
+                                    (point_uv.x * self.texture.width() as f32) as i32,
+                                    (point_uv.y * self.texture.height() as f32) as i32
+                                ];
+                                let texture_color = vector![
+                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
+                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
+                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
+                                ];
+                                // @TODO strange that I need to inline set_pixel here to not clash with borrowing rules,
+                                // for sure something better can be done.
+                                // self.set_pixel(coord_point, color_blend(texture_color, BLACK, normal_correction_coef));
+                                // Pixel data is rgb8, so we find the starting index of a 3-tuple and do 3 assignments.
+                                // @OPTI maybe I can set 3 values simultaneously somehow?
+                                let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
+                                let index = (3 * (coord_point.x + coord_point.y * self.width as i32)) as usize;
+                                self.render_data[index + 0] = fragment_color.x;
+                                self.render_data[index + 1] = fragment_color.y;
+                                self.render_data[index + 2] = fragment_color.z;
+                            }
+                        }
                     }
                 }
             }
@@ -402,12 +411,12 @@ impl Scene {
                             (point_uv.x * texture.width() as f32) as i32,
                             (point_uv.y * texture.height() as f32) as i32
                         ];
-                        let texture_color = Color {
-                            r: texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
-                            g: texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
-                            b: texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2],
-                        };
-                        self.set_pixel(coord_point, Color::blend(texture_color, BLACK, normal_correction_coef));
+                        let texture_color = vector![
+                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
+                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
+                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
+                        ];
+                        self.set_pixel(coord_point, color_blend(texture_color, BLACK, normal_correction_coef));
                     }
                 }
             }

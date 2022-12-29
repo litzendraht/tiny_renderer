@@ -1,4 +1,4 @@
-mod util;
+mod shader;
 mod scene;
 mod app;
 
