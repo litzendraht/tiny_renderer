@@ -6,6 +6,8 @@ use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
 use na::{vector, Vector2, Vector3, matrix, Matrix4};
 
+use crate::shader::ShaderPipeline;
+
 const WHITE: Vector3<u8> = vector![255, 255, 255];
 const BLACK: Vector3<u8> = vector![0,   0,   0];
 const RED:   Vector3<u8> = vector![255, 0,   0];
@@ -32,11 +34,15 @@ fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
 /// (0, 0) is the bottom left coordinate.
-pub struct Scene {
+pub struct Scene<T> 
+    where for<'a> T: ShaderPipeline<'a> 
+{
     width: u32,
     height: u32,
     model: RawObj,
     texture: RgbImage,
+    // Pipeline, specifying vertex and fragment shaders
+    shader_pipeline: T,
     // Scene settings.
     light_direction: Vector3<f32>,
     // Combined transform, applied to vertices to get final screen coordinates.
@@ -50,15 +56,18 @@ pub struct Scene {
     render_data: Vec<u8>,
 }
 
-impl Scene {
+impl<T> Scene<T> 
+    where for<'a> T: ShaderPipeline<'a>
+{
     /// Generates new Scene struct with specified width and height.
     /// Pixel data format is assumed to be rgb8.
     pub fn new(
         width: u32, 
         height: u32,
         model: RawObj,
-        texture: RgbImage,
-    ) -> Scene {
+        texture: RgbImage
+    ) -> Self {
+        let shader_pipeline = T::new(&model, &texture);
         let light_direction = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
         let n_pixels = (width * height) as usize;
         let total_transform_matrix = Matrix4::<f32>::identity();
@@ -70,6 +79,7 @@ impl Scene {
             height,
             model,
             texture,
+            shader_pipeline,
             light_direction,
             total_transform_matrix,
             z_buffer,
@@ -158,23 +168,23 @@ impl Scene {
                                       view_matrix;
     }
 
-    /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
-    /// Applies perspective.
-    fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {        
-        let hom_v = vector![v.x, v.y, v.z, 1.0];
-        let hom_transformed_v = self.total_transform_matrix * hom_v;
-        let transformed_v = vector![
-            hom_transformed_v.x / hom_transformed_v.w,
-            hom_transformed_v.y / hom_transformed_v.w,
-            hom_transformed_v.z / hom_transformed_v.w
-        ];
+    // /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
+    // /// Applies perspective.
+    // fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {        
+    //     let hom_v = vector![v.x, v.y, v.z, 1.0];
+    //     let hom_transformed_v = self.total_transform_matrix * hom_v;
+    //     let transformed_v = vector![
+    //         hom_transformed_v.x / hom_transformed_v.w,
+    //         hom_transformed_v.y / hom_transformed_v.w,
+    //         hom_transformed_v.z / hom_transformed_v.w
+    //     ];
 
-        return ScenePoint {
-            x: transformed_v.x as i32,
-            y: transformed_v.y as i32,
-            z: transformed_v.z,
-        }
-    }
+    //     return ScenePoint {
+    //         x: transformed_v.x as i32,
+    //         y: transformed_v.y as i32,
+    //         z: transformed_v.z,
+    //     }
+    // }
 
     /// Sets Scene pixel to a color at specifed coordinate.
     /// 
@@ -214,7 +224,7 @@ impl Scene {
             };
         }
 
-        // Getting barycentric coordinates for a point in relation to a triangle.
+        // Getting barycentric coordinates for a point in relation to a rasterized triangle coordinates.
         fn to_barycentric_coord(
             coord_point: Vector2<i32>, 
             coord_a: Vector2<i32>, 
@@ -247,32 +257,15 @@ impl Scene {
                 Polygon::PTN(indices) => &indices,
                 _ => panic!("Encountered some garbage, while looking through polygons."),
             };
-            let a = vector![
-                self.model.positions[indices[0].0].0,
-                self.model.positions[indices[0].0].1,
-                self.model.positions[indices[0].0].2
-            ];
-            let b = vector![
-                self.model.positions[indices[1].0].0,
-                self.model.positions[indices[1].0].1,
-                self.model.positions[indices[1].0].2
-            ];
-            let c = vector![
-                self.model.positions[indices[2].0].0,
-                self.model.positions[indices[2].0].1,
-                self.model.positions[indices[2].0].2
-            ];
 
-            // Calculating normal projection on the face.
-            let face_normal = (b - a).cross(&(c - a));
-            let mut normal_correction_coef = self.light_direction.dot(&face_normal); 
-
-            // Backface culling.
-            if normal_correction_coef < 0.00 {
+            if !self.shader_pipeline.vertex(
+                self.total_transform_matrix, 
+                vector![indices[0].0, indices[1].0, indices[2].0]
+            ) {
+                // Culling.
                 continue;
             }
 
-            normal_correction_coef /= face_normal.norm();
             // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct uvs?
             let uv_a = vector![
                 self.model.tex_coords[indices[0].1].0,
@@ -287,28 +280,39 @@ impl Scene {
                 1.0 - self.model.tex_coords[indices[2].1].1
             ];
 
-            let scene_point_a = self.to_scene_point(a);
-            let scene_point_b = self.to_scene_point(b);
-            let scene_point_c = self.to_scene_point(c);
-            let coord_a = vector![scene_point_a.x, scene_point_a.y];
-            let coord_b = vector![scene_point_b.x, scene_point_b.y];
-            let coord_c = vector![scene_point_c.x, scene_point_c.y];
-            let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
+            // let scene_point_a = self.to_scene_point(a);
+            // let scene_point_b = self.to_scene_point(b);
+            // let scene_point_c = self.to_scene_point(c);
+            // let coord_a = vector![scene_point_a.x, scene_point_a.y];
+            // let coord_b = vector![scene_point_b.x, scene_point_b.y];
+            // let coord_c = vector![scene_point_c.x, scene_point_c.y];
+            let transformed_coords = self.shader_pipeline.get_transformed_coords();
+            let bbox = get_triangle_bounding_box(
+                transformed_coords[0], 
+                transformed_coords[1], 
+                transformed_coords[2]
+            );
             // Accounting for possibility that bbox can reach outside of the screen.
             for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
                 for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
                     // 
                     let pixel_index = (i + j * self.width as i32) as usize;
-                    let bar_coord = to_barycentric_coord(vector![i, j], coord_a, coord_b, coord_c);
+                    let bar_coord = to_barycentric_coord(
+                        vector![i, j], 
+                        transformed_coords[0], 
+                        transformed_coords[1],
+                        transformed_coords[2]
+                    );
 
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.
                     if bar_coord.x < 0.00 || bar_coord.y < 0.00 || bar_coord.z < 0.00 {
                         continue;
                     }
 
-                    let z_to_screen = bar_coord.x * scene_point_a.z + 
-                                    bar_coord.y * scene_point_b.z +
-                                    bar_coord.z * scene_point_c.z;                    
+                    let vertex_z_values = self.shader_pipeline.get_vertex_z_values();
+                    let z_to_screen = bar_coord.x * vertex_z_values[0] + 
+                                      bar_coord.y * vertex_z_values[1] +
+                                      bar_coord.z * vertex_z_values[2];                    
 
                     // Checking z-buffer, on failure skipping the pixel.
                     if z_to_screen <= self.z_buffer[pixel_index] {
@@ -319,8 +323,8 @@ impl Scene {
                     self.z_buffer[pixel_index] = z_to_screen;
                     // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
                     let point_uv = bar_coord.x * uv_a + 
-                                bar_coord.y * uv_b + 
-                                bar_coord.z * uv_c; 
+                                   bar_coord.y * uv_b + 
+                                   bar_coord.z * uv_c; 
                     let texture_coord = vector![
                         (point_uv.x * self.texture.width() as f32) as i32,
                         (point_uv.y * self.texture.height() as f32) as i32
@@ -335,7 +339,8 @@ impl Scene {
                     // would borrow self mutably. Maybe there is a pretty way to solve this though.
                     // Pixel data is rgb8, so we find the starting pixel_index of a 3-tuple and do 3 assignments.
                     // @OPTI maybe I can set 3 values simultaneously somehow?
-                    let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
+                    let fragment_color = color_blend(texture_color, BLACK, 1.0);
+                    // let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
                     self.render_data[3 * pixel_index + 0] = fragment_color.x;
                     self.render_data[3 * pixel_index + 1] = fragment_color.y;
                     self.render_data[3 * pixel_index + 2] = fragment_color.z;

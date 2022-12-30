@@ -9,6 +9,7 @@ use nalgebra as na;
 use na::vector;
 
 use crate::scene::Scene;
+use crate::shader::{ShaderPipeline, DefaultSP};
 
 // @TODO redo asset_path to be an actual Path object somehow
 pub struct Params {
@@ -45,7 +46,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let texture = image::open(texture_path)?.into_rgb8();
     println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
-    let mut scene = Scene::new(params.width, params.height, model, texture);
+    let mut scene = Scene::<DefaultSP>::new(params.width, params.height, model, texture);
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([params.width, params.height]),
