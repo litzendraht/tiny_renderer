@@ -7,15 +7,15 @@ const HEIGHT: u32 = 800;
 
 #[show_image::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // @TODO command line arguments to change context.
-    let context = app::Context {
+    // @TODO command line arguments to change app parameters.
+    let params = app::Params {
         width: WIDTH,
         height: HEIGHT,
         print_fps: true,
         asset_path: String::from("assets/african_head"),
     };
 
-    app::run(context)?;
+    app::run(params)?;
 
     return Ok(());
 }

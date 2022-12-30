@@ -11,7 +11,7 @@ use na::vector;
 use crate::scene::Scene;
 
 // @TODO redo asset_path to be an actual Path object somehow
-pub struct Context {
+pub struct Params {
     pub width: u32,
     pub height: u32,
     pub print_fps: bool,
@@ -31,10 +31,10 @@ fn is_exit_event(window_event: event::WindowEvent) -> bool {
 }
 
 /// Actualy launches the window, showing images.
-/// Takes struct, defining execution context.
-pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{    
-    let model_path = context.asset_path.clone() + "/model.obj";
-    let texture_path = context.asset_path.clone() + "/texture.tga";
+/// Takes struct, defining execution params.
+pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{    
+    let model_path = params.asset_path.clone() + "/model.obj";
+    let texture_path = params.asset_path.clone() + "/texture.tga";
 
     println!("Loading model from: {}", model_path);
     let model = parse_obj(BufReader::new(File::open(model_path)?))?;
@@ -45,10 +45,10 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
     let texture = image::open(texture_path)?.into_rgb8();
     println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
-    let mut scene = Scene::new(context.width, context.height, model, texture);
+    let mut scene = Scene::new(params.width, params.height, model, texture);
 
     let window_options: WindowOptions = WindowOptions {
-        size: Some([context.width, context.height]),
+        size: Some([params.width, params.height]),
         ..Default::default()
     };
     let window = create_window("output", window_options)?;
@@ -68,15 +68,18 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
         scene.clear();        
 
         // Setting up camera position and direction.
-        let look_from = vector![1.0 * passed_time.sin(), 0., 1.0 * passed_time.cos()];
-        let look_at = vector![0., 0., 0.];
-        let up = vector![0., 1., 0.];
-
+        let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
+        let look_at = vector![0.0, 0.0, 0.0];
+        let up = vector![0.0, 1.0, 0.0];
         scene.prepare_camera(look_from, look_at, up);
+        // Setting up the light.
+        scene.set_light_direction(vector![0.0, 0.0, 1.0]);
+        // Rendering the current frame.
         scene.render();
 
-        let data = scene.render_data();
-        let image_view = ImageView::new(ImageInfo::rgb8(context.width, context.height), data.as_raw());
+        // Getting rendered data as a data slice and feeding it into window.
+        let data = scene.get_render_data();
+        let image_view = ImageView::new(ImageInfo::rgb8(params.width, params.height), data.as_raw());
         window.set_image("image", image_view)?;
 
         // Unloading all the garbage from event channel, that has piled up, looking for exit event.
@@ -90,7 +93,7 @@ pub fn run(context: Context) -> Result<(), Box<dyn std::error::Error>>{
             None => false,
         };
         
-        if context.print_fps {
+        if params.print_fps {
             // Counting frames to printout stats every seconds.
             frame_counter += 1;
             if time::Instant::now()

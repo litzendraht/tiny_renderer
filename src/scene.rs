@@ -12,7 +12,7 @@ const RED:   Vector3<u8> = vector![255, 0,   0];
 const GREEN: Vector3<u8> = vector![0,   255, 0];
 const BLUE:  Vector3<u8> = vector![0,   0,   255];
 
-/// Point in a scene - x, y give pixel index and z gives distance to the camera.
+/// Point in a scene - x, y give pixel pixel_index and z gives distance to the camera.
 #[derive(Debug, Clone, Copy)]
 struct ScenePoint {
     x: i32,
@@ -23,9 +23,9 @@ struct ScenePoint {
 /// Utility for getting convex combination of 2 Vector3<u8>'s
 fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
     return vector![
-        (t * color_1.x as f32 + (1. - t) * color_2.x as f32) as u8,
-        (t * color_1.y as f32 + (1. - t) * color_2.y as f32) as u8,
-        (t * color_1.z as f32 + (1. - t) * color_2.z as f32) as u8
+        (t * color_1.x as f32 + (1.0 - t) * color_2.x as f32) as u8,
+        (t * color_1.y as f32 + (1.0 - t) * color_2.y as f32) as u8,
+        (t * color_1.z as f32 + (1.0 - t) * color_2.z as f32) as u8
     ];
 }
 
@@ -80,7 +80,7 @@ impl Scene {
     
     /// Get rendered scene as a slice of color values of size 3 * (number of pixels).
     /// Flips the image, so (0, 0) is the lower left corner.
-    pub fn render_data(&self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    pub fn get_render_data(&self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
             self.width, self.height, self.render_data.clone()
         ).unwrap();
@@ -91,7 +91,7 @@ impl Scene {
     /// Get image, representing z-buffer values.
     /// Lazy in a sense, that color data for the image is calculated only if this call is made.
     // @TODO figure out, why it doesn't want to work.
-    pub fn depth_data(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    pub fn get_depth_data(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         for i in 0..self.z_buffer.len() {
             self.depth_data[3 * i + 0] = self.z_buffer[i] as u8;
             self.depth_data[3 * i + 1] = self.z_buffer[i] as u8;
@@ -102,6 +102,11 @@ impl Scene {
         ).unwrap();
         image::imageops::flip_vertical_in_place(&mut buffer);
         return buffer;
+    }
+
+    /// Setter for light direction.
+    pub fn set_light_direction(&mut self, light_direction: Vector3<f32>) {
+        self.light_direction = light_direction;
     }
 
     /// Sets all rendered pixels data to (0, 0, 0) and clears z-buffer.
@@ -122,31 +127,31 @@ impl Scene {
         let y = up.normalize();
         let z = (look_from - look_at).normalize();
         let x = up.cross(&z).normalize();        
-        let model_matrix = matrix![x.x, x.y, x.z, 0.;
-                                    y.x, y.y, y.z, 0.;
-                                    z.x, z.y, z.z, 0.;
-                                    0.,  0.,  0.,  1.];
-        let view_matrix = matrix![1., 0., 0., -look_from.x;
-                                   0., 1., 0., -look_from.y;
-                                   0., 0., 1., -look_from.z;
-                                   0., 0., 0., 1.];
+        let model_matrix = matrix![x.x, x.y, x.z, 0.0;
+                                   y.x, y.y, y.z, 0.0;
+                                   z.x, z.y, z.z, 0.0;
+                                   0.0, 0.0, 0.0, 1.0];
+        let view_matrix = matrix![1.0, 0.0, 0.0, -look_from.x;
+                                  0.0, 1.0, 0.0, -look_from.y;
+                                  0.0, 0.0, 1.0, -look_from.z;
+                                  0.0, 0.0, 0.0, 1.0];
         // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
         // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 work ok.
-        let coef = -1. / 5.0;
-        let projection_matrix = matrix![1., 0., 0.,   0.;
-                                         0., 1., 0.,   0.;
-                                         0., 0., 1.,   0.;
-                                         0., 0., coef, 1.];
+        let coef = -1.0 / 5.0;
+        let projection_matrix = matrix![1.0, 0.0, 0.0,  0.0;
+                                        0.0, 1.0, 0.0,  0.0;
+                                        0.0, 0.0, 1.0,  0.0;
+                                        0.0, 0.0, coef, 1.0];
         // Viewport matrix depedns only on constants.
         // Setting z-buffer resolution to 255.
         // Redef for convenience.
         let w = (self.width - 1) as f32;
         let h = (self.height - 1) as f32;
         let d = 255.;
-        let viewport_matrix = matrix![w / 2., 0.,     0.,     w / 2.;
-                                    0.,     h / 2., 0.,     h / 2.;
-                                    0.,     0.,     d / 2., d / 2.;
-                                    0.,     0.,     0.,     1.];
+        let viewport_matrix = matrix![w / 2.0, 0.0,     0.0,     w / 2.0;
+                                      0.0,     h / 2.0, 0.0,     h / 2.0;
+                                      0.0,     0.0,     d / 2.0, d / 2.0;
+                                      0.0,     0.0,     0.0,     1.0];
         self.total_transform_matrix = viewport_matrix *
                                       projection_matrix * 
                                       model_matrix * 
@@ -156,7 +161,7 @@ impl Scene {
     /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
     /// Applies perspective.
     fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {        
-        let hom_v = vector![v.x, v.y, v.z, 1.];
+        let hom_v = vector![v.x, v.y, v.z, 1.0];
         let hom_transformed_v = self.total_transform_matrix * hom_v;
         let transformed_v = vector![
             hom_transformed_v.x / hom_transformed_v.w,
@@ -175,12 +180,12 @@ impl Scene {
     /// 
     /// Assumes, that pixel data is rgb8.
     pub fn set_pixel(&mut self, p: Vector2<i32>, color: Vector3<u8>) {
-        // Pixel data is rgb8, so we find the starting index of a 3-tuple and do 3 assignments.
+        // Pixel data is rgb8, so we find the starting pixel_index of a 3-tuple and do 3 assignments.
         // @OPTI maybe I can set 3 values simultaneously somehow?
-        let index = (3 * (p.x + p.y * self.width as i32)) as usize;
-        self.render_data[index + 0] = color.x;
-        self.render_data[index + 1] = color.y;
-        self.render_data[index + 2] = color.z;
+        let pixel_index = (3 * (p.x + p.y * self.width as i32)) as usize;
+        self.render_data[pixel_index + 0] = color.x;
+        self.render_data[pixel_index + 1] = color.y;
+        self.render_data[pixel_index + 2] = color.z;
     }
 
     pub fn render(&mut self) {
@@ -237,9 +242,9 @@ impl Scene {
         }
 
         // Drawing all polygons of the model.
-        for polygon in self.model.polygons.iter() {
+        for polygon in &self.model.polygons {
             let indices: &Vec<(usize, usize, usize)> = match polygon {
-                Polygon::PTN(indices) => indices,
+                Polygon::PTN(indices) => &indices,
                 _ => panic!("Encountered some garbage, while looking through polygons."),
             };
             let a = vector![
@@ -260,164 +265,80 @@ impl Scene {
 
             // Calculating normal projection on the face.
             let face_normal = (b - a).cross(&(c - a));
-            let mut normal_correction_coef = self.light_direction.dot(&face_normal);            
+            let mut normal_correction_coef = self.light_direction.dot(&face_normal); 
+
             // Backface culling.
-            if normal_correction_coef > 0.0 {
-                normal_correction_coef /= face_normal.norm();
-                // @TODO figure out, whu texture is upside down, lol? Why do I need to do 1 - y?
-                let uv_a = vector![
-                    self.model.tex_coords[indices[0].1].0,
-                    1.0 - self.model.tex_coords[indices[0].1].1
-                ];
-                let uv_b = vector![
-                    self.model.tex_coords[indices[1].1].0,
-                    1.0 - self.model.tex_coords[indices[1].1].1
-                ];
-                let uv_c = vector![
-                    self.model.tex_coords[indices[2].1].0,
-                    1.0 - self.model.tex_coords[indices[2].1].1
-                ];
-                // scene.draw_triangle(a, b, c, WHITE, normal_correction_coef);
-                let scene_point_a = self.to_scene_point(a);
-                let scene_point_b = self.to_scene_point(b);
-                let scene_point_c = self.to_scene_point(c);
-                let coord_a = vector![scene_point_a.x, scene_point_a.y];
-                let coord_b = vector![scene_point_b.x, scene_point_b.y];
-                let coord_c = vector![scene_point_c.x, scene_point_c.y];
-                let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
-                // Accounting for possibility that bbox can reach outside of the screen.
-                for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
-                    for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
-                        let coord_point = vector![i, j];
-                        let barycentric_coord = to_barycentric_coord(coord_point, coord_a, coord_b, coord_c);
-                        if barycentric_coord.x < 0.0 || barycentric_coord.y < 0.0 || barycentric_coord.z < 0.0 {
-                            // If any of the coordinates are negative, point is not in the triangle, so skipping it.
-                            continue;
-                        } else {
-                            let z_to_screen = barycentric_coord.x * scene_point_a.z + 
-                                            barycentric_coord.y * scene_point_b.z +
-                                            barycentric_coord.z * scene_point_c.z;
-                            let index = (i + j * self.width as i32) as usize;
-                            // Checking z-buffer, on success redrawing the pixel and updating the buffer.
-                            if z_to_screen > self.z_buffer[index] {
-                                self.z_buffer[index] = z_to_screen;
-                                let point_uv = barycentric_coord.x * uv_a + 
-                                            barycentric_coord.y * uv_b + 
-                                            barycentric_coord.z * uv_c; 
-                                let texture_coord = vector![
-                                    (point_uv.x * self.texture.width() as f32) as i32,
-                                    (point_uv.y * self.texture.height() as f32) as i32
-                                ];
-                                let texture_color = vector![
-                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
-                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
-                                    self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
-                                ];
-                                // @TODO strange that I need to inline set_pixel here to not clash with borrowing rules,
-                                // for sure something better can be done.
-                                // self.set_pixel(coord_point, color_blend(texture_color, BLACK, normal_correction_coef));
-                                // Pixel data is rgb8, so we find the starting index of a 3-tuple and do 3 assignments.
-                                // @OPTI maybe I can set 3 values simultaneously somehow?
-                                let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
-                                let index = (3 * (coord_point.x + coord_point.y * self.width as i32)) as usize;
-                                self.render_data[index + 0] = fragment_color.x;
-                                self.render_data[index + 1] = fragment_color.y;
-                                self.render_data[index + 2] = fragment_color.z;
-                            }
-                        }
-                    }
-                }
+            if normal_correction_coef < 0.00 {
+                continue;
             }
-        }
-    }
 
-    /// Draw a triangle with vertices at specified coordiantes and filled with specified color.
-    pub fn draw_triangle_textured(
-        &mut self, 
-        a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>, 
-        uv_a: Vector2<f32>, uv_b: Vector2<f32>, uv_c: Vector2<f32>,
-        texture: &ImageBuffer<Rgb<u8>, Vec<u8>>,
-        normal_correction_coef: f32
-    ) {
-        // Simple local bounding box struct for convenience.
-        #[derive(Debug)]
-        struct BoundingBox {
-            ll: Vector2<i32>, // lower left corner
-            ur: Vector2<i32>, // upper right corner
-        }
-
-        // Helper used to find bounding box of a triangle.
-        fn get_triangle_bounding_box(coord_a: Vector2<i32>, coord_b: Vector2<i32>, coord_c: Vector2<i32>) -> BoundingBox {
-            return BoundingBox {
-                ll: vector![
-                    min(min(coord_a.x, coord_b.x), coord_c.x),
-                    min(min(coord_a.y, coord_b.y), coord_c.y)
-                ],
-                ur: vector![
-                    max(max(coord_a.x, coord_b.x), coord_c.x),
-                    max(max(coord_a.y, coord_b.y), coord_c.y)
-                ]
-            };
-        }
-
-        fn to_barycentric_coord(coord_point: Vector2<i32>, coord_a: Vector2<i32>, coord_b: Vector2<i32>, coord_c: Vector2<i32>) -> Vector3<f32> {
-            let raw_cross = vector![
-                    (coord_b.x - coord_a.x) as f32,
-                    (coord_c.x - coord_a.x) as f32,
-                    (coord_a.x - coord_point.x) as f32
-                ].cross(&vector![
-                    (coord_b.y - coord_a.y) as f32,
-                    (coord_c.y - coord_a.y) as f32,
-                    (coord_a.y - coord_point.y) as f32
-                ]);
-            if raw_cross.z.abs() < 1.0 {
-                // Degenerate triangle, returning something with negative coordinate.
-                return vector![-1.0, 1.0, 1.0];
-            }
-            return vector![
-                1.0 - (raw_cross.x + raw_cross.y) / raw_cross.z,
-                raw_cross.x / raw_cross.z,
-                raw_cross.y / raw_cross.z
+            normal_correction_coef /= face_normal.norm();
+            // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct uvs?
+            let uv_a = vector![
+                self.model.tex_coords[indices[0].1].0,
+                1.0 - self.model.tex_coords[indices[0].1].1
             ];
-        }
+            let uv_b = vector![
+                self.model.tex_coords[indices[1].1].0,
+                1.0 - self.model.tex_coords[indices[1].1].1
+            ];
+            let uv_c = vector![
+                self.model.tex_coords[indices[2].1].0,
+                1.0 - self.model.tex_coords[indices[2].1].1
+            ];
 
-        let scene_point_a = self.to_scene_point(a);
-        let scene_point_b = self.to_scene_point(b);
-        let scene_point_c = self.to_scene_point(c);
-        let coord_a = vector![scene_point_a.x, scene_point_a.y];
-        let coord_b = vector![scene_point_b.x, scene_point_b.y];
-        let coord_c = vector![scene_point_c.x, scene_point_c.y];
-        let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
-        // Accounting for possibility that bbox can reach outside of the screen.
-        for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
-            for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
-                let coord_point = vector![i, j];
-                let barycentric_coord = to_barycentric_coord(coord_point, coord_a, coord_b, coord_c);
-                if barycentric_coord.x < 0.0 || barycentric_coord.y < 0.0 || barycentric_coord.z < 0.0 {
+            let scene_point_a = self.to_scene_point(a);
+            let scene_point_b = self.to_scene_point(b);
+            let scene_point_c = self.to_scene_point(c);
+            let coord_a = vector![scene_point_a.x, scene_point_a.y];
+            let coord_b = vector![scene_point_b.x, scene_point_b.y];
+            let coord_c = vector![scene_point_c.x, scene_point_c.y];
+            let bbox = get_triangle_bounding_box(coord_a, coord_b, coord_c);
+            // Accounting for possibility that bbox can reach outside of the screen.
+            for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
+                for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
+                    // 
+                    let pixel_index = (i + j * self.width as i32) as usize;
+                    let bar_coord = to_barycentric_coord(vector![i, j], coord_a, coord_b, coord_c);
+
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.
-                    continue;
-                } else {
-                    let z_to_screen = barycentric_coord.x * scene_point_a.z + 
-                                      barycentric_coord.y * scene_point_b.z +
-                                      barycentric_coord.z * scene_point_c.z;
-                    let index = (i + j * self.width as i32) as usize;
-                    // Checking z-buffer, on success redrawing the pixel and updating the buffer.
-                    if z_to_screen > self.z_buffer[index] {
-                        self.z_buffer[index] = z_to_screen;
-                        let point_uv = barycentric_coord.x * uv_a + 
-                                       barycentric_coord.y * uv_b + 
-                                       barycentric_coord.z * uv_c; 
-                        let texture_coord = vector![
-                            (point_uv.x * texture.width() as f32) as i32,
-                            (point_uv.y * texture.height() as f32) as i32
-                        ];
-                        let texture_color = vector![
-                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
-                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
-                            texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
-                        ];
-                        self.set_pixel(coord_point, color_blend(texture_color, BLACK, normal_correction_coef));
+                    if bar_coord.x < 0.00 || bar_coord.y < 0.00 || bar_coord.z < 0.00 {
+                        continue;
                     }
+
+                    let z_to_screen = bar_coord.x * scene_point_a.z + 
+                                    bar_coord.y * scene_point_b.z +
+                                    bar_coord.z * scene_point_c.z;                    
+
+                    // Checking z-buffer, on failure skipping the pixel.
+                    if z_to_screen <= self.z_buffer[pixel_index] {
+                        continue;
+                    }
+
+                    // z-buffer check is passed, so setting the pixel and new z-buffer value.
+                    self.z_buffer[pixel_index] = z_to_screen;
+                    // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
+                    let point_uv = bar_coord.x * uv_a + 
+                                bar_coord.y * uv_b + 
+                                bar_coord.z * uv_c; 
+                    let texture_coord = vector![
+                        (point_uv.x * self.texture.width() as f32) as i32,
+                        (point_uv.y * self.texture.height() as f32) as i32
+                    ];
+                    let texture_color = vector![
+                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
+                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
+                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
+                    ];
+                    // @TODO one would assume that set_pixel can be used here but since self is borrowed immutably
+                    // due to us being inside the for loop over &self.model.polygons, we can't use it, since it
+                    // would borrow self mutably. Maybe there is a pretty way to solve this though.
+                    // Pixel data is rgb8, so we find the starting pixel_index of a 3-tuple and do 3 assignments.
+                    // @OPTI maybe I can set 3 values simultaneously somehow?
+                    let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
+                    self.render_data[3 * pixel_index + 0] = fragment_color.x;
+                    self.render_data[3 * pixel_index + 1] = fragment_color.y;
+                    self.render_data[3 * pixel_index + 2] = fragment_color.z;
                 }
             }
         }
