@@ -210,21 +210,23 @@ impl ShaderPipeline for GouraudSP {
             ];
         }
 
-        // Calculating normal projection on the face.
+        // Calculating normal from the face.
         let face_normal = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0]));
-        let mut normal_correction_coef = self.light_direction.dot(&face_normal);
 
         // Backface culling.
-        if normal_correction_coef < 0.0 {
+        if self.light_direction.dot(&face_normal) < 0.0 {
             return false;
         }
 
-        normal_correction_coef /= face_normal.norm();
-        self.buffer.vertex_intensities = vector![
-            normal_correction_coef, 
-            normal_correction_coef, 
-            normal_correction_coef
-        ];
+        // Calculating light intensities at each vertex to then interpolate them in fragment shader.
+        for i in 0..3 {
+            let vertex_normal = vector![
+                model.normals[normal_indices[i]].0,
+                model.normals[normal_indices[i]].1,
+                model.normals[normal_indices[i]].2
+            ];
+            self.buffer.vertex_intensities[i] = self.light_direction.dot(&vertex_normal);
+        }
         
         for i in 0..3 {
             let hom_v = vector![vertices[i].x, vertices[i].y, vertices[i].z, 1.0];
