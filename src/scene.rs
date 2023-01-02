@@ -159,24 +159,6 @@ impl<T> Scene<T>
                                       view_matrix;
     }
 
-    // /// Tranfromation of Vector3 with x, y in [-1.0, 1.0] to ScenePoint.
-    // /// Applies perspective.
-    // fn to_scene_point(&self, v: Vector3<f32>) -> ScenePoint {        
-    //     let hom_v = vector![v.x, v.y, v.z, 1.0];
-    //     let hom_transformed_v = self.total_transform_matrix * hom_v;
-    //     let transformed_v = vector![
-    //         hom_transformed_v.x / hom_transformed_v.w,
-    //         hom_transformed_v.y / hom_transformed_v.w,
-    //         hom_transformed_v.z / hom_transformed_v.w
-    //     ];
-
-    //     return ScenePoint {
-    //         x: transformed_v.x as i32,
-    //         y: transformed_v.y as i32,
-    //         z: transformed_v.z,
-    //     }
-    // }
-
     /// Sets Scene pixel to a color at specifed coordinate.
     /// 
     /// Assumes, that pixel data is rgb8.
@@ -254,15 +236,15 @@ impl<T> Scene<T>
                 vector![indices[0].0, indices[1].0, indices[2].0],
                 self.total_transform_matrix,                
             ) {
-                // Culling.
+                // Vertex shader decided, that whole polygon whouldn't be renderer.
                 continue;
             }
 
-            let transformed_coords = self.shader_pipeline.get_transformed_coords();
+            let vertex_transformed_coords = self.shader_pipeline.get_buffer().vertex_transformed_coords;
             let bbox = get_triangle_bounding_box(
-                transformed_coords[0], 
-                transformed_coords[1], 
-                transformed_coords[2]
+                vertex_transformed_coords[0], 
+                vertex_transformed_coords[1], 
+                vertex_transformed_coords[2]
             );
 
             // Accounting for possibility that bbox can reach outside of the screen.
@@ -271,9 +253,9 @@ impl<T> Scene<T>
                     let pixel_index = (i + j * self.width as i32) as usize;
                     let bar_coord = to_barycentric_coord(
                         vector![i, j], 
-                        transformed_coords[0], 
-                        transformed_coords[1],
-                        transformed_coords[2]
+                        vertex_transformed_coords[0], 
+                        vertex_transformed_coords[1],
+                        vertex_transformed_coords[2]
                     );
 
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.
@@ -281,7 +263,7 @@ impl<T> Scene<T>
                         continue;
                     }
 
-                    let vertex_z_values = self.shader_pipeline.get_vertex_z_values();
+                    let vertex_z_values = self.shader_pipeline.get_buffer().vertex_z_values;
                     let z_to_screen = bar_coord.x * vertex_z_values[0] + 
                                       bar_coord.y * vertex_z_values[1] +
                                       bar_coord.z * vertex_z_values[2];                    
@@ -294,14 +276,17 @@ impl<T> Scene<T>
                     // z-buffer check is passed, so setting the pixel and new z-buffer value.
                     self.z_buffer[pixel_index] = z_to_screen;
 
-                    match self.shader_pipeline.fragment(&self.texture, bar_coord) {
-                        Some(fragment_color) => {
-                            self.render_data[3 * pixel_index + 0] = fragment_color.x;
-                            self.render_data[3 * pixel_index + 1] = fragment_color.y;
-                            self.render_data[3 * pixel_index + 2] = fragment_color.z;
-                        },
-                        None => (), // If fragment shader returns None, we don't color in the pixel.
+                    // Fragment shader has an ability to skip a pixel.
+                    if !self.shader_pipeline.fragment(&self.texture, bar_coord) {
+                        continue;
                     }
+
+                    // If fragment shader returned true, taking fragment color form the buffer and coloring
+                    // in the appropriate pixel.
+                    let fragment_color = self.shader_pipeline.get_buffer().fragment_color;
+                    self.render_data[3 * pixel_index + 0] = fragment_color.x;
+                    self.render_data[3 * pixel_index + 1] = fragment_color.y;
+                    self.render_data[3 * pixel_index + 2] = fragment_color.z;
                 }
             }
         }

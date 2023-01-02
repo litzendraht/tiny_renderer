@@ -19,10 +19,7 @@ fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8
 // produced thi awkward unobviuous implementation.
 pub trait ShaderPipeline {
     fn new() -> Self;
-    /// Getter for transformed coordinates obtained by aplying vertex part of the pipeline to the polygon.
-    fn get_transformed_coords(&self) -> [Vector2<i32>; 3];
-    /// Getter for z values of vertices obtained by aplying vertex part of the pipeline to the polygon.
-    fn get_vertex_z_values(&self) -> [f32; 3];
+    fn get_buffer(&self) -> &Buffer;
     /// "Vertex" shader, taking model, 3 indices, defining the polygon of a model and transformation matrix,
     /// which produces vertex coordinates on a screen and z-buffer values. Basically is resposible for working
     /// on geometry.
@@ -36,53 +33,57 @@ pub trait ShaderPipeline {
         &mut self,
         texture: &RgbImage, 
         bar_coord: Vector3<f32>
-    ) -> Option<Vector3<u8>>;
+    ) -> bool;
+}
+
+#[derive(Clone, Copy)]
+/// Buffer for passing values between different stages of a pipeline.
+pub struct Buffer {
+    // Local buffer for passing values between vertex and fragment parts of the pipeline.    
+    pub vertex_intensities: Vector3<f32>, // Light intensity in each vertex of a polygon.
+    pub vertex_transformed_coords: [Vector2<i32>; 3], // Coordinates after all transformation, including viewport.
+    pub vertex_z_values: [f32; 3], // Value used for comparison with existing z-buffer values.
+    pub vertex_uvs: [Vector2<f32>; 3], // UV coordiantes, defining where to look for a color of a vertex.
+    // Access to color and vertex z-value after application of fragment shader.
+    pub fragment_color: Vector3<u8> 
 }
 
 #[derive(Clone, Copy)]
 pub struct DefaultSP {
     // Global shader parameters.
-    pub light_direction: Vector3<f32>,
-    // Local buffer for passing values between vertex and fragment parts of the pipeline.    
-    pub varying_intensity: Vector3<f32>, // Intensity in each vertex of a polygon.
-    pub transformed_coords: [Vector2<i32>; 3], // Coordinates after all transformation, including viewport.
-    pub vertex_z_values: [f32; 3], // Value used for comparison with existing z-buffer values.
-    pub uvs: [Vector2<f32>; 3], // UV coordiantes, defining where to look for a color of a vertex.
-    // Access to color after application of fragment shader.
-    pub fragment_color: Vector3<u8> 
+    light_direction: Vector3<f32>,
+    buffer: Buffer
 }
 
-// #[derive(Clone, Copy)]
-// pub struct GouraudSP<'a> {
-//     // Global shader parameters.
-//     model: &'a RawObj,
-//     texture: &'a RgbImage,
-//     pub light_direction: Vector3<f32>,
-//     // Local buffer for passing values between vertex and fragment parts of the pipeline.
+#[derive(Clone, Copy)]
+pub struct GouraudSP {
+    // Global shader parameters.
+    light_direction: Vector3<f32>,
+    buffer: Buffer
+}
 
-//     varying_intensity: Vector3<f32>, // Intensity in each vertex of a polygon.
-//     // Access to color after application of fragment shader.
-//     pub fragment_color: Vector3<u8> 
-// }
+impl Buffer {
+    fn new() -> Self {
+        return Buffer {
+            vertex_intensities:        vector![0.0, 0.0, 0.0],
+            vertex_transformed_coords: [vector![0, 0]; 3],
+            vertex_z_values:           [0.0; 3],
+            vertex_uvs:                [vector![0.0, 0.0]; 3],
+            fragment_color:            vector![0, 0, 0],
+        };
+    }
+}
 
 impl ShaderPipeline for DefaultSP {
     fn new() -> Self {
         return DefaultSP {
             light_direction: vector![0.0, 0.0, 1.0],
-            varying_intensity: vector![0.0, 0.0, 0.0],
-            transformed_coords: [vector![0, 0]; 3],
-            vertex_z_values: [0.0; 3],
-            uvs: [vector![0.0, 0.0]; 3],
-            fragment_color: vector![0, 0, 0],
+            buffer: Buffer::new(),
         };
     }
 
-    fn get_transformed_coords(&self) -> [Vector2<i32>; 3] {
-        return self.transformed_coords;
-    }
-
-    fn get_vertex_z_values(&self) -> [f32; 3] {
-        return self.vertex_z_values;
+    fn get_buffer(&self) -> &Buffer {
+        return &self.buffer;
     }
 
     fn vertex(
@@ -110,7 +111,7 @@ impl ShaderPipeline for DefaultSP {
         }
 
         normal_correction_coef /= face_normal.norm();
-        self.varying_intensity = vector![
+        self.buffer.vertex_intensities = vector![
             normal_correction_coef, 
             normal_correction_coef, 
             normal_correction_coef
@@ -124,18 +125,30 @@ impl ShaderPipeline for DefaultSP {
                 hom_transformed_v.y / hom_transformed_v.w,
                 hom_transformed_v.z / hom_transformed_v.w
             ];
-            self.transformed_coords[i][0] = (hom_transformed_v.x / hom_transformed_v.w) as i32;
-            self.transformed_coords[i][1] = (hom_transformed_v.y / hom_transformed_v.w) as i32;
-            self.vertex_z_values[i] = transformed_v.z;
+            self.buffer.vertex_transformed_coords[i][0] = (hom_transformed_v.x / hom_transformed_v.w) as i32;
+            self.buffer.vertex_transformed_coords[i][1] = (hom_transformed_v.y / hom_transformed_v.w) as i32;
+            self.buffer.vertex_z_values[i] = transformed_v.z;
         }
 
-        // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct uvs?
-        for i in 0..3 {
-            self.uvs[i] = vector![
-                model.tex_coords[indices[i]].0,
-                1.0 - model.tex_coords[indices[i]].1
-            ];
-        }
+        // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct vertex_uvs?
+        // for i in 0..3 {
+        //     self.buffer.vertex_uvs[i] = vector![
+        //         model.tex_coords[indices[i]].0,
+        //         1.0 - model.tex_coords[indices[i]].1
+        //     ];
+        // }
+        self.buffer.vertex_uvs[0] = vector![
+            model.tex_coords[indices[0]].0,
+            1.0 - model.tex_coords[indices[0]].1
+        ];
+        self.buffer.vertex_uvs[1] = vector![
+            model.tex_coords[indices[1]].0,
+            1.0 - model.tex_coords[indices[1]].1
+        ];
+        self.buffer.vertex_uvs[2] = vector![
+            model.tex_coords[indices[2]].0,
+            1.0 - model.tex_coords[indices[2]].1
+        ];
 
         return true;
     }
@@ -144,11 +157,11 @@ impl ShaderPipeline for DefaultSP {
         &mut self, 
         texture: &RgbImage,
         bar_coord: Vector3<f32>
-    ) -> Option<Vector3<u8>> {
+    ) -> bool {
         // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
-        let fragment_uv = bar_coord.x * self.uvs[0] + 
-                          bar_coord.y * self.uvs[1] + 
-                          bar_coord.z * self.uvs[2]; 
+        let fragment_uv = bar_coord.x * self.buffer.vertex_uvs[0] + 
+                          bar_coord.y * self.buffer.vertex_uvs[1] + 
+                          bar_coord.z * self.buffer.vertex_uvs[2]; 
 
         // Converting uv into explicit tex_coords.
         let texture_coord = vector![
@@ -165,62 +178,114 @@ impl ShaderPipeline for DefaultSP {
 
         // Calculating intensity at the fragment by combining barycentric coordinates and 
         // calculated vertex intensities.
-        let normal_correction_coef = bar_coord.x * self.varying_intensity[0] + 
-                                     bar_coord.y * self.varying_intensity[1] + 
-                                     bar_coord.z * self.varying_intensity[2];
-        let fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+        // let normal_correction_coef = bar_coord.x * self.buffer.vertex_intensities[0] + 
+        //                              bar_coord.y * self.buffer.vertex_intensities[1] + 
+        //                              bar_coord.z * self.buffer.vertex_intensities[2];
+        let normal_correction_coef = 1.0;
+        self.buffer.fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+        // self.buffer.fragment_color = color_blend(vector![255, 255, 255], vector![0, 0, 0], normal_correction_coef);
 
-        return Some(fragment_color);
+        return true;
     }
 }
 
-// impl<'a> ShaderPipeline for GouraudSP<'a> {
-//     fn new(model: &RawObj, texture: &RgbImage) -> Self {
+// impl ShaderPipeline for GouraudSP {
+//     fn new() -> Self {
 //         return GouraudSP {
-//             model,
-//             texture,
 //             light_direction: vector![0.0, 0.0, 1.0],
-//             varying_intensity: vector![0.0, 0.0, 0.0],
-//             fragment_color: vector![0, 0, 0],
+//             buffer: Buffer::new(),
 //         };
 //     }
 
-//     fn vertex(&mut self, indices: Vector3<usize>) -> bool{
-//         let a = vector![
-//             self.model.positions[indices[0]].0,
-//             self.model.positions[indices[0]].1,
-//             self.model.positions[indices[0]].2
-//         ];
-//         let b = vector![
-//             self.model.positions[indices[1]].0,
-//             self.model.positions[indices[1]].1,
-//             self.model.positions[indices[1]].2
-//         ];
-//         let c = vector![
-//             self.model.positions[indices[2]].0,
-//             self.model.positions[indices[2]].1,
-//             self.model.positions[indices[2]].2
-//         ];
+//     fn get_buffer(&self) -> &Buffer {
+//         return &self.buffer;
+//     }
+
+//     fn vertex(
+//         &mut self, 
+//         model: &RawObj,         
+//         indices: Vector3<usize>,
+//         transform_matrix: Matrix4<f32>,
+//     ) -> bool {
+//         // Getting actual vertex coordinates from the model using given indices.
+//         let mut vertices = [vector![0.0, 0.0, 0.0]; 3];
+//         for i in 0..3 {
+//             vertices[i] = vector![
+//                 model.positions[indices[i]].0,
+//                 model.positions[indices[i]].1,
+//                 model.positions[indices[i]].2
+//             ];
+//         }
 
 //         // Calculating normal projection on the face.
-//         let face_normal = (b - a).cross(&(c - a));
+//         let face_normal = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0]));
 //         let mut normal_correction_coef = self.light_direction.dot(&face_normal);
 //         // Backface culling.
 //         if normal_correction_coef < 0.0 {
 //             return false;
-//         } else {
-//             normal_correction_coef /= face_normal.norm();
-//             self.varying_intensity = vector![
-//                 normal_correction_coef, 
-//                 normal_correction_coef, 
-//                 normal_correction_coef
-//                 ];
-//             return true;
 //         }
+
+//         normal_correction_coef /= face_normal.norm();
+//         self.buffer.vertex_intensities = vector![
+//             normal_correction_coef, 
+//             normal_correction_coef, 
+//             normal_correction_coef
+//         ];
         
+//         for i in 0..3 {
+//             let hom_v = vector![vertices[i].x, vertices[i].y, vertices[i].z, 1.0];
+//             let hom_transformed_v = transform_matrix * hom_v;
+//             let transformed_v = vector![
+//                 hom_transformed_v.x / hom_transformed_v.w,
+//                 hom_transformed_v.y / hom_transformed_v.w,
+//                 hom_transformed_v.z / hom_transformed_v.w
+//             ];
+//             self.buffer.vertex_transformed_coords[i][0] = (hom_transformed_v.x / hom_transformed_v.w) as i32;
+//             self.buffer.vertex_transformed_coords[i][1] = (hom_transformed_v.y / hom_transformed_v.w) as i32;
+//             self.buffer.vertex_z_values[i] = transformed_v.z;
+//         }
+
+//         // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct vertex_uvs?
+//         for i in 0..3 {
+//             self.buffer.vertex_uvs[i] = vector![
+//                 model.tex_coords[indices[i]].0,
+//                 1.0 - model.tex_coords[indices[i]].1
+//             ];
+//         }
+
+//         return true;
 //     }
 
-//     fn fragment(&mut self, bar_coord: Vector3<f32>) -> Option<Vector3<u8>> {
-//         return None;
+//     fn fragment(
+//         &mut self, 
+//         texture: &RgbImage,
+//         bar_coord: Vector3<f32>
+//     ) -> Option<Vector3<u8>> {
+//         // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
+//         let fragment_uv = bar_coord.x * self.buffer.vertex_uvs[0] + 
+//                           bar_coord.y * self.buffer.vertex_uvs[1] + 
+//                           bar_coord.z * self.buffer.vertex_uvs[2]; 
+
+//         // Converting uv into explicit tex_coords.
+//         let texture_coord = vector![
+//             (fragment_uv.x * texture.width() as f32) as u32,
+//             (fragment_uv.y * texture.height() as f32) as u32
+//         ];
+
+//         // Getting color at texture_coord.
+//         let texture_color = vector![
+//             texture.get_pixel(texture_coord.x, texture_coord.y).0[0],
+//             texture.get_pixel(texture_coord.x, texture_coord.y).0[1],
+//             texture.get_pixel(texture_coord.x, texture_coord.y).0[2]
+//         ];
+
+//         // Calculating intensity at the fragment by combining barycentric coordinates and 
+//         // calculated vertex intensities.
+//         let normal_correction_coef = bar_coord.x * self.buffer.vertex_intensities[0] + 
+//                                      bar_coord.y * self.buffer.vertex_intensities[1] + 
+//                                      bar_coord.z * self.buffer.vertex_intensities[2];
+//         let fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+
+//         return Some(fragment_color);
 //     }
 // }

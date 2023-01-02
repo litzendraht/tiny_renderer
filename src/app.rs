@@ -69,17 +69,20 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         scene.clear();        
 
         // Setting up camera position and direction.
-        let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
+        // let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
+        let look_from = vector![0.0, 0.0, 1.0];
         let look_at = vector![0.0, 0.0, 0.0];
         let up = vector![0.0, 1.0, 0.0];
         scene.prepare_camera(look_from, look_at, up);
         // Setting up the light.
-        scene.set_light_direction(vector![0.0, 0.0, 1.0]);
+        // scene.set_light_direction(vector![0.0, 0.0, 1.0]);
+        scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()]);
         // Rendering the current frame.
         scene.render();
 
         // Getting rendered data as a data slice and feeding it into window.
         let data = scene.get_render_data();
+        // let data = scene.get_depth_data();
         let image_view = ImageView::new(ImageInfo::rgb8(params.width, params.height), data.as_raw());
         window.set_image("image", image_view)?;
 
