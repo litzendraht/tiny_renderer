@@ -22,20 +22,11 @@ struct ScenePoint {
     z: f32,
 }
 
-/// Utility for getting convex combination of 2 Vector3<u8>'s
-fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
-    return vector![
-        (t * color_1.x as f32 + (1.0 - t) * color_2.x as f32) as u8,
-        (t * color_1.y as f32 + (1.0 - t) * color_2.y as f32) as u8,
-        (t * color_1.z as f32 + (1.0 - t) * color_2.z as f32) as u8
-    ];
-}
-
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
 /// (0, 0) is the bottom left coordinate.
 pub struct Scene<T> 
-    where for<'a> T: ShaderPipeline<'a> 
+    where T: ShaderPipeline 
 {
     width: u32,
     height: u32,
@@ -57,7 +48,7 @@ pub struct Scene<T>
 }
 
 impl<T> Scene<T> 
-    where for<'a> T: ShaderPipeline<'a>
+    where T: ShaderPipeline
 {
     /// Generates new Scene struct with specified width and height.
     /// Pixel data format is assumed to be rgb8.
@@ -67,7 +58,7 @@ impl<T> Scene<T>
         model: RawObj,
         texture: RgbImage
     ) -> Self {
-        let shader_pipeline = T::new(&model, &texture);
+        let shader_pipeline = T::new();
         let light_direction = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
         let n_pixels = (width * height) as usize;
         let total_transform_matrix = Matrix4::<f32>::identity();
@@ -259,43 +250,24 @@ impl<T> Scene<T>
             };
 
             if !self.shader_pipeline.vertex(
-                self.total_transform_matrix, 
-                vector![indices[0].0, indices[1].0, indices[2].0]
+                &self.model,
+                vector![indices[0].0, indices[1].0, indices[2].0],
+                self.total_transform_matrix,                
             ) {
                 // Culling.
                 continue;
             }
 
-            // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct uvs?
-            let uv_a = vector![
-                self.model.tex_coords[indices[0].1].0,
-                1.0 - self.model.tex_coords[indices[0].1].1
-            ];
-            let uv_b = vector![
-                self.model.tex_coords[indices[1].1].0,
-                1.0 - self.model.tex_coords[indices[1].1].1
-            ];
-            let uv_c = vector![
-                self.model.tex_coords[indices[2].1].0,
-                1.0 - self.model.tex_coords[indices[2].1].1
-            ];
-
-            // let scene_point_a = self.to_scene_point(a);
-            // let scene_point_b = self.to_scene_point(b);
-            // let scene_point_c = self.to_scene_point(c);
-            // let coord_a = vector![scene_point_a.x, scene_point_a.y];
-            // let coord_b = vector![scene_point_b.x, scene_point_b.y];
-            // let coord_c = vector![scene_point_c.x, scene_point_c.y];
             let transformed_coords = self.shader_pipeline.get_transformed_coords();
             let bbox = get_triangle_bounding_box(
                 transformed_coords[0], 
                 transformed_coords[1], 
                 transformed_coords[2]
             );
+
             // Accounting for possibility that bbox can reach outside of the screen.
             for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
                 for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
-                    // 
                     let pixel_index = (i + j * self.width as i32) as usize;
                     let bar_coord = to_barycentric_coord(
                         vector![i, j], 
@@ -305,7 +277,7 @@ impl<T> Scene<T>
                     );
 
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.
-                    if bar_coord.x < 0.00 || bar_coord.y < 0.00 || bar_coord.z < 0.00 {
+                    if bar_coord.x < 0.0 || bar_coord.y < 0.0 || bar_coord.z < 0.0 {
                         continue;
                     }
 
@@ -321,29 +293,15 @@ impl<T> Scene<T>
 
                     // z-buffer check is passed, so setting the pixel and new z-buffer value.
                     self.z_buffer[pixel_index] = z_to_screen;
-                    // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
-                    let point_uv = bar_coord.x * uv_a + 
-                                   bar_coord.y * uv_b + 
-                                   bar_coord.z * uv_c; 
-                    let texture_coord = vector![
-                        (point_uv.x * self.texture.width() as f32) as i32,
-                        (point_uv.y * self.texture.height() as f32) as i32
-                    ];
-                    let texture_color = vector![
-                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[0],
-                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[1],
-                        self.texture.get_pixel(texture_coord.x as u32, texture_coord.y as u32).0[2]
-                    ];
-                    // @TODO one would assume that set_pixel can be used here but since self is borrowed immutably
-                    // due to us being inside the for loop over &self.model.polygons, we can't use it, since it
-                    // would borrow self mutably. Maybe there is a pretty way to solve this though.
-                    // Pixel data is rgb8, so we find the starting pixel_index of a 3-tuple and do 3 assignments.
-                    // @OPTI maybe I can set 3 values simultaneously somehow?
-                    let fragment_color = color_blend(texture_color, BLACK, 1.0);
-                    // let fragment_color = color_blend(texture_color, BLACK, normal_correction_coef);
-                    self.render_data[3 * pixel_index + 0] = fragment_color.x;
-                    self.render_data[3 * pixel_index + 1] = fragment_color.y;
-                    self.render_data[3 * pixel_index + 2] = fragment_color.z;
+
+                    match self.shader_pipeline.fragment(&self.texture, bar_coord) {
+                        Some(fragment_color) => {
+                            self.render_data[3 * pixel_index + 0] = fragment_color.x;
+                            self.render_data[3 * pixel_index + 1] = fragment_color.y;
+                            self.render_data[3 * pixel_index + 2] = fragment_color.z;
+                        },
+                        None => (), // If fragment shader returns None, we don't color in the pixel.
+                    }
                 }
             }
         }
