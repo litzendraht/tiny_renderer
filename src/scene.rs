@@ -226,6 +226,10 @@ impl<T> Scene<T>
 
         // Drawing all polygons of the model.
         for polygon in &self.model.polygons {
+            // Indices are &Vec((usize, usize, usize)), where first item corresponds to indices for
+            // positions, second to indices for texture uv coords and third to indices for normals
+            // which results in a bloated call to vertex shader.
+            // @TODO make it not bloated.
             let indices: &Vec<(usize, usize, usize)> = match polygon {
                 Polygon::PTN(indices) => &indices,
                 _ => panic!("Encountered some garbage, while looking through polygons."),
@@ -234,6 +238,8 @@ impl<T> Scene<T>
             if !self.shader_pipeline.vertex(
                 &self.model,
                 vector![indices[0].0, indices[1].0, indices[2].0],
+                vector![indices[0].1, indices[1].1, indices[2].1],
+                vector![indices[0].2, indices[1].2, indices[2].2],
                 self.total_transform_matrix,                
             ) {
                 // Vertex shader decided, that whole polygon whouldn't be renderer.
