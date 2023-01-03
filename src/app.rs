@@ -34,20 +34,30 @@ fn is_exit_event(window_event: event::WindowEvent) -> bool {
 /// Actualy launches the window, showing images.
 /// Takes struct, defining execution params.
 pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{    
-    let model_path = params.asset_path.clone() + "/model.obj";
+    let obj_path = params.asset_path.clone() + "/model.obj";
     let texture_path = params.asset_path.clone() + "/texture.tga";
+    let normal_map_path = params.asset_path.clone() + "/normal_map.tga";
+    let spec_map_path = params.asset_path.clone() + "/spec_map.tga";
 
-    println!("Loading model from: {}", model_path);
-    let model = parse_obj(BufReader::new(File::open(model_path)?))?;
-    println!("Number of vertices in a model: {}", model.positions.len());
-    println!("Number of polygons in a model: {}", model.polygons.len());
+    println!("Loading model from: {}", obj_path);
+    let obj = parse_obj(BufReader::new(File::open(obj_path)?))?;
+    println!("Number of vertices in a model: {}", obj.positions.len());
+    println!("Number of polygons in a model: {}", obj.polygons.len());
 
     println!("Loading texture from: {}", texture_path);
     let texture = image::open(texture_path)?.into_rgb8();
     println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
+    println!("Loading texture from: {}", normal_map_path);
+    let normal_map = image::open(normal_map_path)?.into_rgb8();
+    println!("Dimensions of loaded texture are: {} x {}", normal_map.width(), normal_map.height());
+
+    println!("Loading texture from: {}", spec_map_path);
+    let spec_map = image::open(spec_map_path)?.into_rgb8();
+    println!("Dimensions of loaded texture are: {} x {}", spec_map.width(), spec_map.height());
+
     // let mut scene = Scene::<DefaultSP>::new(params.width, params.height, model, texture);
-    let mut scene = Scene::<GouraudSP>::new(params.width, params.height, model, texture);
+    let mut scene = Scene::<GouraudSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([params.width, params.height]),

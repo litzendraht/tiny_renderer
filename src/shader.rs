@@ -1,7 +1,7 @@
-use obj::raw::RawObj;
-use image::RgbImage;
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, Vector4, Matrix4, Matrix2x3};
+use na::{vector, Vector3, Vector4, Matrix4, Matrix2x3};
+
+use crate::scene::Model;
 
 /// Utility for getting convex combination of 2 Vector3<u8>'s
 fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
@@ -46,7 +46,7 @@ pub trait ShaderPipeline {
     /// on geometry.
     fn vertex(
         &mut self, 
-        model: &RawObj,
+        model: &Model,
         pos_indices: Vector3<usize>,
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>      
@@ -54,7 +54,7 @@ pub trait ShaderPipeline {
     /// "Fragment" shader, taking a texture and barycendric coordinates of a fragment.
     fn fragment(
         &mut self,
-        texture: &RgbImage,
+        model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool;
 }
@@ -77,18 +77,6 @@ pub struct Buffer {
     pub fragment_color:                Vector3<u8> 
 }
 
-#[derive(Clone, Copy)]
-pub struct DefaultSP {
-    // Global shader parameters.
-    light_direction: Vector3<f32>,
-    buffer: Buffer
-}
-
-#[derive(Clone, Copy)]
-pub struct GouraudSP {
-    buffer: Buffer
-}
-
 impl Buffer {
     fn new() -> Self {
         return Buffer {
@@ -97,10 +85,19 @@ impl Buffer {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct DefaultSP {
+    buffer: Buffer
+}
+
+#[derive(Clone, Copy)]
+pub struct GouraudSP {
+    buffer: Buffer
+}
+
 impl ShaderPipeline for DefaultSP {
     fn new() -> Self {
         return DefaultSP {
-            light_direction: vector![0.0, 0.0, 1.0],
             buffer: Buffer::new(),
         };
     }
@@ -115,7 +112,7 @@ impl ShaderPipeline for DefaultSP {
 
     fn vertex(
         &mut self, 
-        model: &RawObj,         
+        model: &Model,         
         pos_indices: Vector3<usize>,
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
@@ -128,9 +125,9 @@ impl ShaderPipeline for DefaultSP {
         let mut vertices = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertices[i] = vector![
-                model.positions[pos_indices[i]].0,
-                model.positions[pos_indices[i]].1,
-                model.positions[pos_indices[i]].2
+                model.obj.positions[pos_indices[i]].0,
+                model.obj.positions[pos_indices[i]].1,
+                model.obj.positions[pos_indices[i]].2
             ];
         }
 
@@ -172,8 +169,8 @@ impl ShaderPipeline for DefaultSP {
             self.buffer.vertex_uvs.set_column(
                 i, 
                 &vector![
-                    model.tex_coords[tex_indices[i]].0,
-                    1.0 - model.tex_coords[tex_indices[i]].1
+                    model.obj.tex_coords[tex_indices[i]].0,
+                    1.0 - model.obj.tex_coords[tex_indices[i]].1
                 ]
             );
         }
@@ -183,7 +180,7 @@ impl ShaderPipeline for DefaultSP {
 
     fn fragment(
         &mut self, 
-        texture: &RgbImage,
+        model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
         // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
@@ -191,13 +188,13 @@ impl ShaderPipeline for DefaultSP {
 
         // Converting uv into explicit tex_coords.
         let texture_coord = vector![
-            (fragment_uv.x * texture.width() as f32) as u32,
-            (fragment_uv.y * texture.height() as f32) as u32
+            (fragment_uv.x * model.texture.width() as f32) as u32,
+            (fragment_uv.y * model.texture.height() as f32) as u32
         ];
 
         // Getting color at texture_coord.
         let texture_color = Vector3::<u8>::from_row_slice(
-            &texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
+            &model.texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
         );
 
         // Calculating intensity at the fragment by combining barycentric coordinates and 
@@ -226,7 +223,7 @@ impl ShaderPipeline for GouraudSP {
 
     fn vertex(
         &mut self, 
-        model: &RawObj,         
+        model: &Model,         
         pos_indices: Vector3<usize>,
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
@@ -240,9 +237,9 @@ impl ShaderPipeline for GouraudSP {
         let mut vertices = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertices[i] = vector![
-                model.positions[pos_indices[i]].0,
-                model.positions[pos_indices[i]].1,
-                model.positions[pos_indices[i]].2
+                model.obj.positions[pos_indices[i]].0,
+                model.obj.positions[pos_indices[i]].1,
+                model.obj.positions[pos_indices[i]].2
             ];
         }
 
@@ -257,9 +254,9 @@ impl ShaderPipeline for GouraudSP {
         // Calculating light intensities at each vertex to then interpolate them in fragment shader.
         for i in 0..3 {
             let vertex_normal = vector![
-                model.normals[normal_indices[i]].0,
-                model.normals[normal_indices[i]].1,
-                model.normals[normal_indices[i]].2
+                model.obj.normals[normal_indices[i]].0,
+                model.obj.normals[normal_indices[i]].1,
+                model.obj.normals[normal_indices[i]].2
             ];
             let transformed_vertex_normal = from_hom_vector(
                 self.buffer.it_direction_transform_matrix * to_hom_vector(vertex_normal)
@@ -270,7 +267,7 @@ impl ShaderPipeline for GouraudSP {
         for i in 0..3 {
             let transformed_v = from_hom_point(
                 self.buffer.vertex_transform_matrix * to_hom_point(vertices[i])
-            );;
+            );
             self.buffer.vertex_transformed_coords.set_column(
                 i,
                 &vector![
@@ -286,8 +283,8 @@ impl ShaderPipeline for GouraudSP {
             self.buffer.vertex_uvs.set_column(
                 i, 
                 &vector![
-                    model.tex_coords[tex_indices[i]].0,
-                    1.0 - model.tex_coords[tex_indices[i]].1
+                    model.obj.tex_coords[tex_indices[i]].0,
+                    1.0 - model.obj.tex_coords[tex_indices[i]].1
                 ]
             );
         }
@@ -297,7 +294,7 @@ impl ShaderPipeline for GouraudSP {
 
     fn fragment(
         &mut self, 
-        texture: &RgbImage,
+        model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
         // Finding texture uv and coordinate with the help of calculated barycentric coordinates.
@@ -305,13 +302,13 @@ impl ShaderPipeline for GouraudSP {
 
         // Converting uv into explicit tex_coords.
         let texture_coord = vector![
-            (fragment_uv.x * texture.width() as f32) as u32,
-            (fragment_uv.y * texture.height() as f32) as u32
+            (fragment_uv.x * model.texture.width() as f32) as u32,
+            (fragment_uv.y * model.texture.height() as f32) as u32
         ];
 
         // Getting color at texture_coord.
         let texture_color = Vector3::<u8>::from_row_slice(
-            &texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
+            &model.texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
         );
 
         // Calculating intensity at the fragment by combining barycentric coordinates and 

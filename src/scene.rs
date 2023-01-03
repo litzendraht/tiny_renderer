@@ -4,26 +4,31 @@ use obj::raw::RawObj;
 use obj::raw::object::Polygon;
 use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, matrix, Matrix4, Matrix2x3};
+use na::{vector, Vector2, Vector3, matrix, Matrix2x3};
 
 use crate::shader::ShaderPipeline;
+
+/// Struct, holding all information about the model, including geometry, texture and normal and specular maps.
+pub struct Model {
+    pub obj: RawObj,
+    pub texture: RgbImage,
+    pub normal_map: RgbImage,
+    pub spec_map: RgbImage,
+}
 
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
 /// (0, 0) is the bottom left coordinate.
-pub struct Scene<T> 
-    where T: ShaderPipeline 
+pub struct Scene<T> where 
+    T: ShaderPipeline 
 {
     width: u32,
     height: u32,
-    model: RawObj,
-    texture: RgbImage,
+    model: Model,
     // Pipeline, specifying vertex and fragment shaders
     shader_pipeline: T,
     // Scene settings.
     light_direction: Vector3<f32>,
-    // Combined transform, applied to vertices to get final screen coordinates.
-    total_transform_matrix: Matrix4<f32>,
     // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
     // Takes f32 values in [0, 255] for ease of debugging.
     z_buffer: Vec<f32>,
@@ -33,21 +38,28 @@ pub struct Scene<T>
     render_data: Vec<u8>,
 }
 
-impl<T> Scene<T> 
-    where T: ShaderPipeline
+impl<T> Scene<T> where
+    T: ShaderPipeline
 {
     /// Generates new Scene struct with specified width and height.
     /// Pixel data format is assumed to be rgb8.
     pub fn new(
         width: u32, 
         height: u32,
-        model: RawObj,
-        texture: RgbImage
+        obj: RawObj,
+        texture: RgbImage,
+        normal_map: RgbImage,
+        spec_map: RgbImage
     ) -> Self {
+        let model = Model {
+            obj,
+            texture,
+            normal_map,
+            spec_map,
+        };
         let shader_pipeline = T::new();
         let light_direction = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
         let n_pixels = (width * height) as usize;
-        let total_transform_matrix = Matrix4::<f32>::identity();
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
         let depth_data: Vec<u8>  = vec![0; 3 * n_pixels];
         let render_data: Vec<u8> = vec![0; 3 * n_pixels];
@@ -55,10 +67,8 @@ impl<T> Scene<T>
             width,
             height,
             model,
-            texture,
             shader_pipeline,
             light_direction,
-            total_transform_matrix,
             z_buffer,
             depth_data,
             render_data,
@@ -216,7 +226,7 @@ impl<T> Scene<T>
         }
 
         // Drawing all polygons of the model.
-        for polygon in &self.model.polygons {
+        for polygon in &self.model.obj.polygons {
             // Indices are &Vec((usize, usize, usize)), where first item corresponds to indices for
             // positions, second to indices for texture uv coords and third to indices for normals
             // which results in a bloated call to vertex shader.
@@ -265,7 +275,7 @@ impl<T> Scene<T>
                     self.z_buffer[pixel_index] = z_to_screen;
 
                     // Fragment shader has an ability to skip a pixel.
-                    if !self.shader_pipeline.fragment(&self.texture, bar_coord) {
+                    if !self.shader_pipeline.fragment(&self.model, bar_coord) {
                         continue;
                     }
 
