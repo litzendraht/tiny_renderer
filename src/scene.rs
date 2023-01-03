@@ -4,23 +4,9 @@ use obj::raw::RawObj;
 use obj::raw::object::Polygon;
 use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, matrix, Matrix4};
+use na::{vector, Vector2, Vector3, matrix, Matrix4, Matrix2x3};
 
 use crate::shader::ShaderPipeline;
-
-const WHITE: Vector3<u8> = vector![255, 255, 255];
-const BLACK: Vector3<u8> = vector![0,   0,   0];
-const RED:   Vector3<u8> = vector![255, 0,   0];
-const GREEN: Vector3<u8> = vector![0,   255, 0];
-const BLUE:  Vector3<u8> = vector![0,   0,   255];
-
-/// Point in a scene - x, y give pixel pixel_index and z gives distance to the camera.
-#[derive(Debug, Clone, Copy)]
-struct ScenePoint {
-    x: i32,
-    y: i32,
-    z: f32,
-}
 
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
@@ -123,7 +109,7 @@ impl<T> Scene<T>
 
     /// Recalculating model, view, projection and viewport matrices to be used when drawing primitives.
     /// look_from is camera position, look_at defines directon.
-    pub fn prepare_camera(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
+    pub fn prepare_render(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
         // New coordinate system around camera position, with z
         let y = up.normalize();
         let z = (look_from - look_at).normalize();
@@ -143,7 +129,7 @@ impl<T> Scene<T>
                                         0.0, 1.0, 0.0,  0.0;
                                         0.0, 0.0, 1.0,  0.0;
                                         0.0, 0.0, coef, 1.0];
-        // Viewport matrix depedns only on constants.
+        // Viewport matrix depends only on constants.
         // Setting z-buffer resolution to 255.
         // Redef for convenience.
         let w = (self.width - 1) as f32;
@@ -153,10 +139,21 @@ impl<T> Scene<T>
                                       0.0,     h / 2.0, 0.0,     h / 2.0;
                                       0.0,     0.0,     d / 2.0, d / 2.0;
                                       0.0,     0.0,     0.0,     1.0];
-        self.total_transform_matrix = viewport_matrix *
-                                      projection_matrix * 
-                                      model_matrix * 
-                                      view_matrix;
+
+        // Preparing shader pipeline for the render pass.
+        let buffer = self.shader_pipeline.get_buffer_mut();
+        buffer.light_direction = self.light_direction;
+        buffer.vertex_transform_matrix = viewport_matrix *
+                                         projection_matrix * 
+                                         model_matrix * 
+                                         view_matrix;
+        buffer.direction_transform_matrix = model_matrix * view_matrix;
+        // @TODO something is not quite right here, light direction seems to move in relation 
+        // to the model, when it shouldn't. 
+        buffer.it_direction_transform_matrix = ( 
+            model_matrix * 
+            view_matrix
+        ).transpose().try_inverse().unwrap();
     }
 
     /// Sets Scene pixel to a color at specifed coordinate.
@@ -180,38 +177,32 @@ impl<T> Scene<T>
         }
 
         // Helper used to find bounding box of a triangle.
-        fn get_triangle_bounding_box(
-            coord_a: Vector2<i32>, 
-            coord_b: Vector2<i32>, 
-            coord_c: Vector2<i32>
-        ) -> BoundingBox {
+        fn get_triangle_bounding_box(coords: Matrix2x3<i32>) -> BoundingBox {
             return BoundingBox {
                 ll: vector![
-                    min(min(coord_a.x, coord_b.x), coord_c.x),
-                    min(min(coord_a.y, coord_b.y), coord_c.y)
+                    min(min(coords.m11, coords.m12), coords.m13),
+                    min(min(coords.m21, coords.m22), coords.m23)
                 ],
                 ur: vector![
-                    max(max(coord_a.x, coord_b.x), coord_c.x),
-                    max(max(coord_a.y, coord_b.y), coord_c.y)
+                    max(max(coords.m11, coords.m12), coords.m13),
+                    max(max(coords.m21, coords.m22), coords.m23)
                 ]
             };
         }
 
         // Getting barycentric coordinates for a point in relation to a rasterized triangle coordinates.
         fn to_barycentric_coord(
-            coord_point: Vector2<i32>, 
-            coord_a: Vector2<i32>, 
-            coord_b: Vector2<i32>, 
-            coord_c: Vector2<i32>
+            internal_point: Vector2<i32>, 
+            coords: Matrix2x3<i32>
         ) -> Vector3<f32> {
             let raw_cross = vector![
-                    (coord_b.x - coord_a.x) as f32,
-                    (coord_c.x - coord_a.x) as f32,
-                    (coord_a.x - coord_point.x) as f32
+                    (coords.m12 - coords.m11) as f32,
+                    (coords.m13 - coords.m11) as f32,
+                    (coords.m11 - internal_point.x) as f32
                 ].cross(&vector![
-                    (coord_b.y - coord_a.y) as f32,
-                    (coord_c.y - coord_a.y) as f32,
-                    (coord_a.y - coord_point.y) as f32
+                    (coords.m22 - coords.m21) as f32,
+                    (coords.m23 - coords.m21) as f32,
+                    (coords.m21 - internal_point.y) as f32
                 ]);
             if raw_cross.z.abs() < 1.0 {
                 // Degenerate triangle, returning something with negative coordinate.
@@ -239,19 +230,14 @@ impl<T> Scene<T>
                 &self.model,
                 vector![indices[0].0, indices[1].0, indices[2].0],
                 vector![indices[0].1, indices[1].1, indices[2].1],
-                vector![indices[0].2, indices[1].2, indices[2].2],
-                self.total_transform_matrix,                
+                vector![indices[0].2, indices[1].2, indices[2].2]               
             ) {
-                // Vertex shader decided, that whole polygon whouldn't be renderer.
+                // Vertex shader decided, that whole polygon wouldn't be rendered.
                 continue;
             }
 
             let vertex_transformed_coords = self.shader_pipeline.get_buffer().vertex_transformed_coords;
-            let bbox = get_triangle_bounding_box(
-                vertex_transformed_coords[0], 
-                vertex_transformed_coords[1], 
-                vertex_transformed_coords[2]
-            );
+            let bbox = get_triangle_bounding_box(vertex_transformed_coords);
 
             // Accounting for possibility that bbox can reach outside of the screen.
             for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
@@ -259,9 +245,7 @@ impl<T> Scene<T>
                     let pixel_index = (i + j * self.width as i32) as usize;
                     let bar_coord = to_barycentric_coord(
                         vector![i, j], 
-                        vertex_transformed_coords[0], 
-                        vertex_transformed_coords[1],
-                        vertex_transformed_coords[2]
+                        vertex_transformed_coords
                     );
 
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.
@@ -270,9 +254,7 @@ impl<T> Scene<T>
                     }
 
                     let vertex_z_values = self.shader_pipeline.get_buffer().vertex_z_values;
-                    let z_to_screen = bar_coord.x * vertex_z_values[0] + 
-                                      bar_coord.y * vertex_z_values[1] +
-                                      bar_coord.z * vertex_z_values[2];                    
+                    let z_to_screen = bar_coord.dot(&vertex_z_values);                    
 
                     // Checking z-buffer, on failure skipping the pixel.
                     if z_to_screen <= self.z_buffer[pixel_index] {
