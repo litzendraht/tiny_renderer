@@ -4,9 +4,30 @@ use obj::raw::RawObj;
 use obj::raw::object::Polygon;
 use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, matrix, Matrix2x3};
+use na::{vector, Vector2, Vector3, Vector4, matrix, Matrix2x3};
 
 use crate::shader::ShaderPipeline;
+
+// @TODO remove double definition.
+/// Transformation of a point to homogenous coordinates.
+fn to_hom_point(v: Vector3<f32>) -> Vector4<f32> {
+    return vector![v.x, v.y, v.z, 1.0];
+}
+
+/// Transformation of a vector to homogenous coordinates.
+fn to_hom_vector(v: Vector3<f32>) -> Vector4<f32> {
+    return vector![v.x, v.y, v.z, 0.0];
+}
+
+/// Transformation of a point from homogenous coordinates.
+fn from_hom_point(v: Vector4<f32>) -> Vector3<f32> {
+    return vector![v.x / v.w, v.y / v.w, v.z / v.w];
+}
+
+/// Transformation of a vector from homogenous coordinates.
+fn from_hom_vector(v: Vector4<f32>) -> Vector3<f32> {
+    return vector![v.x, v.y, v.z];
+}
 
 /// Struct, holding all information about the model, including geometry, texture and normal and specular maps.
 pub struct Model {
@@ -14,6 +35,45 @@ pub struct Model {
     pub texture: RgbImage,
     pub normal_map: RgbImage,
     pub spec_map: RgbImage,
+}
+
+impl Model {
+    pub fn get_vertex_position_at_index(&self, index: usize) -> Vector3<f32> {
+        return vector![
+            self.obj.positions[index].0,
+            self.obj.positions[index].1,
+            self.obj.positions[index].2
+        ];
+    }
+
+    /// Returns texture color from texture file at uv.
+    pub fn get_texture_color_at_uv(&self, uv: Vector2<f32>) -> Vector3<u8> {
+        // Converting uv into explicit tex_coords.
+        let texture_coord = vector![
+            (uv.x * self.texture.width() as f32) as u32,
+            (uv.y * self.texture.height() as f32) as u32
+        ];
+
+        return Vector3::<u8>::from_row_slice(
+            &self.texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
+        );
+    }
+
+    /// Returns normalized normal from normal map at uv.
+    pub fn get_normal_at_uv(&self, uv: Vector2<f32>) -> Vector3<f32> {
+        // Converting uv into explicit normal coords.
+        let normal_map_coord = vector![
+            (uv.x * self.normal_map.width() as f32) as u32,
+            (uv.y * self.normal_map.height() as f32) as u32
+        ];
+
+        // Subtracting 0.5 to get from [0, 255] to [-0.5, 0.5]
+        return vector![
+            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[0]) as f32 / 255.0 - 0.5,
+            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[1]) as f32 / 255.0 - 0.5,
+            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[2]) as f32 / 255.0 - 0.5
+        ].normalize();
+    }
 }
 
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
@@ -58,7 +118,7 @@ impl<T> Scene<T> where
             spec_map,
         };
         let shader_pipeline = T::new();
-        let light_direction = vector![0.0, 0.0, 1.0];  // Directed to us from the screen.
+        let light_direction = vector![0.0, 0.0, -1.0];  // Directed from us to the screen.
         let n_pixels = (width * height) as usize;
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
         let depth_data: Vec<u8>  = vec![0; 3 * n_pixels];
@@ -121,12 +181,12 @@ impl<T> Scene<T> where
     /// look_from is camera position, look_at defines directon.
     pub fn prepare_render(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
         // New coordinate system around camera position, with z
-        let y = up.normalize();
-        let z = (look_from - look_at).normalize();
-        let x = up.cross(&z).normalize();        
-        let model_matrix = matrix![x.x, x.y, x.z, 0.0;
-                                   y.x, y.y, y.z, 0.0;
-                                   z.x, z.y, z.z, 0.0;
+        let b = up.normalize();
+        let c = (look_from - look_at).normalize();
+        let a = up.cross(&c).normalize();        
+        let model_matrix = matrix![a.x, a.y, a.z, 0.0;
+                                   b.x, b.y, b.z, 0.0;
+                                   c.x, c.y, c.z, 0.0;
                                    0.0, 0.0, 0.0, 1.0];
         let view_matrix = matrix![1.0, 0.0, 0.0, -look_from.x;
                                   0.0, 1.0, 0.0, -look_from.y;
@@ -152,18 +212,16 @@ impl<T> Scene<T> where
 
         // Preparing shader pipeline for the render pass.
         let buffer = self.shader_pipeline.get_buffer_mut();
-        buffer.light_direction = self.light_direction;
         buffer.vertex_transform_matrix = viewport_matrix *
                                          projection_matrix * 
                                          model_matrix * 
                                          view_matrix;
         buffer.direction_transform_matrix = model_matrix * view_matrix;
-        // @TODO something is not quite right here, light direction seems to move in relation 
-        // to the model, when it shouldn't. 
-        buffer.it_direction_transform_matrix = ( 
-            model_matrix * 
-            view_matrix
-        ).transpose().try_inverse().unwrap();
+        // Not interested in projection and rasterization, when transformaing light direction and normals.
+        buffer.it_direction_transform_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();       
+        buffer.transformed_light_direction = from_hom_vector(
+            buffer.direction_transform_matrix * to_hom_vector(self.light_direction)
+        ).normalize();
     }
 
     /// Sets Scene pixel to a color at specifed coordinate.

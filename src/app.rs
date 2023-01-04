@@ -9,7 +9,7 @@ use nalgebra as na;
 use na::vector;
 
 use crate::scene::Scene;
-use crate::shader::{ShaderPipeline, DefaultSP, GouraudSP};
+use crate::shader::{ShaderPipeline, DefaultSP, GouraudSP, TrueNormalSP, SpecularSP};
 
 // @TODO redo asset_path to be an actual Path object somehow
 pub struct Params {
@@ -48,16 +48,17 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let texture = image::open(texture_path)?.into_rgb8();
     println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
-    println!("Loading texture from: {}", normal_map_path);
+    println!("Loading normal map from: {}", normal_map_path);
     let normal_map = image::open(normal_map_path)?.into_rgb8();
-    println!("Dimensions of loaded texture are: {} x {}", normal_map.width(), normal_map.height());
+    println!("Dimensions of loaded normal map are: {} x {}", normal_map.width(), normal_map.height());
 
-    println!("Loading texture from: {}", spec_map_path);
+    println!("Loading specular map from: {}", spec_map_path);
     let spec_map = image::open(spec_map_path)?.into_rgb8();
-    println!("Dimensions of loaded texture are: {} x {}", spec_map.width(), spec_map.height());
+    println!("Dimensions of loaded specular map are: {} x {}", spec_map.width(), spec_map.height());
 
-    // let mut scene = Scene::<DefaultSP>::new(params.width, params.height, model, texture);
-    let mut scene = Scene::<GouraudSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    // let mut scene = Scene::<DefaultSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    // let mut scene = Scene::<GouraudSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    let mut scene = Scene::<TrueNormalSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([params.width, params.height]),
@@ -85,8 +86,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         let look_at = vector![0.0, 0.0, 0.0];
         let up = vector![0.0, 1.0, 0.0];
         // Setting up the light.
-        scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
-        // scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());
+        // scene.set_light_direction(vector![0.0, 0.0, -1.0].normalize());
+        scene.set_light_direction(vector![-1.0 * passed_time.sin(), 0.0, -1.0 * passed_time.cos()].normalize());
         // Preparing transforms, initializing shader buffer.
         scene.prepare_render(look_from, look_at, up);
         // Rendering the current frame.
