@@ -58,7 +58,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
 
     // let mut scene = Scene::<DefaultSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
     // let mut scene = Scene::<GouraudSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
-    let mut scene = Scene::<TrueNormalSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    // let mut scene = Scene::<TrueNormalSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    let mut scene = Scene::<SpecularSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([params.width, params.height]),
@@ -85,9 +86,10 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         // let look_from = vector![0.0, 0.0, 1.0];
         let look_at = vector![0.0, 0.0, 0.0];
         let up = vector![0.0, 1.0, 0.0];
-        // Setting up the light.
-        // scene.set_light_direction(vector![0.0, 0.0, -1.0].normalize());
-        scene.set_light_direction(vector![-1.0 * passed_time.sin(), 0.0, -1.0 * passed_time.cos()].normalize());
+        // Setting up the light. Direction is from surface to source, so negative of true direction.
+        // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
+        // scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
+        scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());
         // Preparing transforms, initializing shader buffer.
         scene.prepare_render(look_from, look_at, up);
         // Rendering the current frame.

@@ -47,32 +47,40 @@ impl Model {
     }
 
     /// Returns texture color from texture file at uv.
-    pub fn get_texture_color_at_uv(&self, uv: Vector2<f32>) -> Vector3<u8> {
-        // Converting uv into explicit tex_coords.
-        let texture_coord = vector![
+    pub fn get_color_at_uv(&self, uv: Vector2<f32>) -> Vector3<u8> {
+        let coord = vector![
             (uv.x * self.texture.width() as f32) as u32,
             (uv.y * self.texture.height() as f32) as u32
         ];
 
         return Vector3::<u8>::from_row_slice(
-            &self.texture.get_pixel(texture_coord.x, texture_coord.y).0[0..3]
+            &self.texture.get_pixel(coord.x, coord.y).0[0..3]
         );
     }
 
     /// Returns normalized normal from normal map at uv.
     pub fn get_normal_at_uv(&self, uv: Vector2<f32>) -> Vector3<f32> {
-        // Converting uv into explicit normal coords.
-        let normal_map_coord = vector![
+        let coord = vector![
             (uv.x * self.normal_map.width() as f32) as u32,
             (uv.y * self.normal_map.height() as f32) as u32
         ];
 
         // Subtracting 0.5 to get from [0, 255] to [-0.5, 0.5]
         return vector![
-            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[0]) as f32 / 255.0 - 0.5,
-            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[1]) as f32 / 255.0 - 0.5,
-            (self.normal_map.get_pixel(normal_map_coord.x, normal_map_coord.y).0[2]) as f32 / 255.0 - 0.5
+            (self.normal_map.get_pixel(coord.x, coord.y).0[0]) as f32 / 255.0 - 0.5,
+            (self.normal_map.get_pixel(coord.x, coord.y).0[1]) as f32 / 255.0 - 0.5,
+            (self.normal_map.get_pixel(coord.x, coord.y).0[2]) as f32 / 255.0 - 0.5
         ].normalize();
+    }
+
+    /// Returns a [0, 1] from specular mpa at uv.
+    pub fn get_specular_value_at_uv(&self, uv: Vector2<f32>) -> f32 {
+        let coord = vector![
+            (uv.x * self.spec_map.width() as f32) as u32,
+            (uv.y * self.spec_map.height() as f32) as u32
+        ];
+
+        return self.spec_map.get_pixel(coord.x, coord.y).0[0] as f32;
     }
 }
 
@@ -219,7 +227,7 @@ impl<T> Scene<T> where
         buffer.direction_transform_matrix = model_matrix * view_matrix;
         // Not interested in projection and rasterization, when transformaing light direction and normals.
         buffer.it_direction_transform_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();       
-        buffer.transformed_light_direction = from_hom_vector(
+        buffer.t_light_direction = from_hom_vector(
             buffer.direction_transform_matrix * to_hom_vector(self.light_direction)
         ).normalize();
     }
@@ -304,8 +312,8 @@ impl<T> Scene<T> where
                 continue;
             }
 
-            let vertex_transformed_coords = self.shader_pipeline.get_buffer().vertex_transformed_coords;
-            let bbox = get_triangle_bounding_box(vertex_transformed_coords);
+            let vertex_t_coords = self.shader_pipeline.get_buffer().vertex_t_coords;
+            let bbox = get_triangle_bounding_box(vertex_t_coords);
 
             // Accounting for possibility that bbox can reach outside of the screen.
             for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
@@ -313,7 +321,7 @@ impl<T> Scene<T> where
                     let pixel_index = (i + j * self.width as i32) as usize;
                     let bar_coord = to_barycentric_coord(
                         vector![i, j], 
-                        vertex_transformed_coords
+                        vertex_t_coords
                     );
 
                     // If any of the coordinates are negative, point is not in the triangle, so skipping it.

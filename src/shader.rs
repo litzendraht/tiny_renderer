@@ -63,13 +63,13 @@ pub trait ShaderPipeline {
 /// like light direction and transform matrices.
 pub struct Buffer {
     pub camera_direction:              Vector3<f32>,
-    pub transformed_light_direction:   Vector3<f32>,   // Light direction with model and view transformations applied.
+    pub t_light_direction:             Vector3<f32>,   // Light direction with model and view transformations applied.
     pub vertex_transform_matrix:       Matrix4<f32>,   // Applied to vertcies to get final screen coodrdinates.
     pub direction_transform_matrix:    Matrix4<f32>,   // Applied to light direction.
     pub it_direction_transform_matrix: Matrix4<f32>,   // Applied to model normals.
     // Local buffer for passing values between vertex and fragment parts of the pipeline.    
     pub vertex_intensities:            Vector3<f32>,   // Light intensity in each vertex of a polygon.
-    pub vertex_transformed_coords:     Matrix2x3<i32>, // Coordinates after all transformation, including viewport.
+    pub vertex_t_coords:               Matrix2x3<i32>, // Coordinates after all transformation, including viewport.
     pub vertex_z_values:               Vector3<f32>,   // Value used for comparison with existing z-buffer values.
     pub vertex_uvs:                    Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex.
     // Access to color after application of fragment shader.
@@ -133,33 +133,34 @@ impl ShaderPipeline for DefaultSP {
         }
 
         // Calculating normal projection on the face.
-        let face_normal = (vertex_positions[1] - vertex_positions[0]).cross(&(vertex_positions[2] - vertex_positions[0]));
-        let transformed_face_normal = from_hom_vector(
+        let face_normal = (vertex_positions[1] - vertex_positions[0]).cross(
+            &(vertex_positions[2] - vertex_positions[0])
+        );
+        let t_face_normal = from_hom_vector(
             self.buffer.it_direction_transform_matrix * to_hom_vector(face_normal)
         ).normalize();
-        let normal_correction_coef = -self.buffer.transformed_light_direction.dot(&transformed_face_normal);
+        let diff_coef = self.buffer.t_light_direction.dot(&t_face_normal);
 
         self.buffer.vertex_intensities = vector![
-            normal_correction_coef, 
-            normal_correction_coef, 
-            normal_correction_coef
+            diff_coef, 
+            diff_coef, 
+            diff_coef
         ];
         
         for i in 0..3 {
-            let transformed_vertex_position = from_hom_point(
+            let t_vertex_position = from_hom_point(
                 self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
             );
-            self.buffer.vertex_transformed_coords.set_column(
+            self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    transformed_vertex_position.x as i32,
-                    transformed_vertex_position.y as i32
+                    t_vertex_position.x as i32,
+                    t_vertex_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = transformed_vertex_position.z;
+            self.buffer.vertex_z_values[i] = t_vertex_position.z;
         }
 
-        // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct vertex_uvs?
         for i in 0..3 {
             self.buffer.vertex_uvs.set_column(
                 i, 
@@ -180,10 +181,10 @@ impl ShaderPipeline for DefaultSP {
     ) -> bool {
         // Correcting texture color by intensity, but in this pipeline normal is just a face normal, so
         // intensities are all equal and we can just take one at index 0 in vertex_intensities vector.
-        let fragment_uv = self.buffer.vertex_uvs * bar_coord;
-        let texture_color = model.get_texture_color_at_uv(fragment_uv);
-        let normal_correction_coef = self.buffer.vertex_intensities[0];
-        self.buffer.fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+        let uv = self.buffer.vertex_uvs * bar_coord;
+        let color = model.get_color_at_uv(uv);
+        let diff_coef = self.buffer.vertex_intensities[0];
+        self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
     }
@@ -224,29 +225,28 @@ impl ShaderPipeline for GouraudSP {
                 model.obj.normals[normal_indices[i]].1,
                 model.obj.normals[normal_indices[i]].2
             ];
-            let transformed_vertex_positionertex_normal = from_hom_vector(
+            let t_vertex_normal = from_hom_vector(
                 self.buffer.it_direction_transform_matrix * to_hom_vector(vertex_normal)
             ).normalize();
-            self.buffer.vertex_intensities[i] = -self.buffer.transformed_light_direction.dot(
-                &transformed_vertex_positionertex_normal
+            self.buffer.vertex_intensities[i] = self.buffer.t_light_direction.dot(
+                &t_vertex_normal
             );
         }
         
         for i in 0..3 {
-            let transformed_vertex_position = from_hom_point(
+            let t_vertex_position = from_hom_point(
                 self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
             );
-            self.buffer.vertex_transformed_coords.set_column(
+            self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    transformed_vertex_position.x as i32,
-                    transformed_vertex_position.y as i32
+                    t_vertex_position.x as i32,
+                    t_vertex_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = transformed_vertex_position.z;
+            self.buffer.vertex_z_values[i] = t_vertex_position.z;
         }
 
-        // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct vertex_uvs?
         for i in 0..3 {
             self.buffer.vertex_uvs.set_column(
                 i, 
@@ -267,10 +267,10 @@ impl ShaderPipeline for GouraudSP {
     ) -> bool {
         // Correcting texture color by intensity, where intensity is based on the interpolated normal
         // between the vertex_positions, which is produced via barycentric coordinates of the fragment.
-        let fragment_uv = self.buffer.vertex_uvs * bar_coord;
-        let texture_color = model.get_texture_color_at_uv(fragment_uv);
-        let normal_correction_coef = bar_coord.dot(&self.buffer.vertex_intensities);
-        self.buffer.fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+        let uv = self.buffer.vertex_uvs * bar_coord;
+        let color = model.get_color_at_uv(uv);
+        let diff_coef = bar_coord.dot(&self.buffer.vertex_intensities);
+        self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
     }
@@ -305,20 +305,19 @@ impl ShaderPipeline for TrueNormalSP {
         }
         
         for i in 0..3 {
-            let transformed_vertex_position = from_hom_point(
+            let t_vertex_position = from_hom_point(
                 self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
             );
-            self.buffer.vertex_transformed_coords.set_column(
+            self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    transformed_vertex_position.x as i32,
-                    transformed_vertex_position.y as i32
+                    t_vertex_position.x as i32,
+                    t_vertex_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = transformed_vertex_position.z;
+            self.buffer.vertex_z_values[i] = t_vertex_position.z;
         }
 
-        // @TODO figure out, why texture is upside down, lol? Why do I need to do 1 - y to get correct vertex_uvs?
         for i in 0..3 {
             self.buffer.vertex_uvs.set_column(
                 i, 
@@ -339,15 +338,104 @@ impl ShaderPipeline for TrueNormalSP {
     ) -> bool {
         // Correcting texture color by intensity, where intensity is based on the normal, produced
         // by the full normal map of the model.
-        let fragment_uv = self.buffer.vertex_uvs * bar_coord; 
-        let texture_color = model.get_texture_color_at_uv(fragment_uv);
-        let fragment_normal = model.get_normal_at_uv(fragment_uv);
+        let uv = self.buffer.vertex_uvs * bar_coord; 
+        let color = model.get_color_at_uv(uv);
+        let fragment_normal = model.get_normal_at_uv(uv);
         // @TODO why whis does not work correctly?
-        let transformed_fragment_normal = from_hom_vector(
+        let t_fragment_normal = from_hom_vector(
             self.buffer.it_direction_transform_matrix * to_hom_vector(fragment_normal)
         ).normalize();
-        let normal_correction_coef = -self.buffer.transformed_light_direction.dot(&transformed_fragment_normal);
-        self.buffer.fragment_color = color_blend(texture_color, vector![0, 0, 0], normal_correction_coef);
+        let diff_coef = self.buffer.t_light_direction.dot(&t_fragment_normal);
+        self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
+
+        return true;
+    }
+}
+
+impl ShaderPipeline for SpecularSP {
+    fn new() -> Self {
+        return SpecularSP {
+            buffer: Buffer::new(),
+        };
+    }
+
+    fn get_buffer(&self) -> &Buffer {
+        return &self.buffer;
+    }
+
+    fn get_buffer_mut(&mut self) -> &mut Buffer {
+        return &mut self.buffer;
+    }
+
+    fn vertex(
+        &mut self, 
+        model: &Model,         
+        pos_indices: Vector3<usize>,
+        tex_indices: Vector3<usize>,
+        normal_indices: Vector3<usize>
+    ) -> bool {
+        // Getting actual vertex coordinates from the model using given indices.
+        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
+        for i in 0..3 {
+            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
+        }
+        
+        for i in 0..3 {
+            let t_vertex_position = from_hom_point(
+                self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
+            );
+            self.buffer.vertex_t_coords.set_column(
+                i,
+                &vector![
+                    t_vertex_position.x as i32,
+                    t_vertex_position.y as i32
+                ]
+            );
+            self.buffer.vertex_z_values[i] = t_vertex_position.z;
+        }
+
+        for i in 0..3 {
+            self.buffer.vertex_uvs.set_column(
+                i, 
+                &vector![
+                    model.obj.tex_coords[tex_indices[i]].0,
+                    1.0 - model.obj.tex_coords[tex_indices[i]].1
+                ]
+            );
+        }
+
+        return true;
+    }
+
+    fn fragment(
+        &mut self, 
+        model: &Model,
+        bar_coord: Vector3<f32>
+    ) -> bool {
+        // Correcting texture color by intensity, where intensity is based on the normal, produced
+        // by the full normal map of the model.
+        let uv = self.buffer.vertex_uvs * bar_coord; 
+        let color = model.get_color_at_uv(uv);
+        let fragment_normal = model.get_normal_at_uv(uv);
+        // @TODO why whis does not work correctly?
+        let t_fragment_normal = from_hom_vector(
+            self.buffer.it_direction_transform_matrix * to_hom_vector(fragment_normal)
+        ).normalize();
+        // Important minus here - light direction is from source to 
+        let reflected_light_direction = (
+            2.0 * (
+                t_fragment_normal * 
+                self.buffer.t_light_direction.dot(&t_fragment_normal)
+            ) - self.buffer.t_light_direction
+        ).normalize();
+        let diff_coef = self.buffer.t_light_direction.dot(&t_fragment_normal);
+        let spec_coef = 0.6 * reflected_light_direction.z.max(0.0).powf(model.get_specular_value_at_uv(uv));
+        let corrected_color = vector![
+            ((diff_coef + spec_coef) * color[0] as f32).min(255.0) as u8,
+            ((diff_coef + spec_coef) * color[1] as f32).min(255.0) as u8,
+            ((diff_coef + spec_coef) * color[2] as f32).min(255.0) as u8
+        ];
+        self.buffer.fragment_color = corrected_color;
 
         return true;
     }
