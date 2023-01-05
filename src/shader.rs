@@ -1,7 +1,7 @@
 // @TODO no culling at the momement, drawing every face, maybe worth fixing.
 
 use nalgebra as na;
-use na::{vector, Vector3, Vector4, Matrix4, Matrix2x3};
+use na::{vector, Vector3, Vector4, Matrix3, Matrix4, Matrix2x3};
 
 use crate::scene::Model;
 
@@ -61,17 +61,21 @@ pub trait ShaderPipeline {
 #[derive(Default, Clone, Copy)]
 /// Buffer for passing values between different stages of a pipeline and setting up frame constants
 /// like light direction and transform matrices.
+// @TODO not all buffer is used in every shader, but for simplicity it just has all options. Maybe
+// worth thinking about how to get a more fine-grained buffer structure for each shader.
 pub struct Buffer {
     pub camera_direction:              Vector3<f32>,
     pub t_light_direction:             Vector3<f32>,   // Light direction with model and view transformations applied.
-    pub vertex_transform_matrix:       Matrix4<f32>,   // Applied to vertcies to get final screen coodrdinates.
-    pub direction_transform_matrix:    Matrix4<f32>,   // Applied to light direction.
-    pub it_direction_transform_matrix: Matrix4<f32>,   // Applied to model normals.
+    pub vpmv_matrix:                   Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
+    pub mv_matrix:                     Matrix4<f32>,   // Applied to light direction.
+    pub it_mv_matrix:                  Matrix4<f32>,   // Applied to model normals.
     // Local buffer for passing values between vertex and fragment parts of the pipeline.    
     pub vertex_intensities:            Vector3<f32>,   // Light intensity in each vertex of a polygon.
-    pub vertex_t_coords:               Matrix2x3<i32>, // Coordinates after all transformation, including viewport.
+    pub vertex_t_positions:            Matrix3<f32>,   // Transformed vertex positions as columns.
+    pub vertex_t_coords:               Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
+    pub vertex_t_normals:              Matrix3<f32>,   // Transformed vertex normals at each vertex as columns.
     pub vertex_z_values:               Vector3<f32>,   // Value used for comparison with existing z-buffer values.
-    pub vertex_uvs:                    Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex.
+    pub vertex_uvs:                    Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex as columns.
     // Access to color after application of fragment shader.
     pub fragment_color:                Vector3<u8> 
 }
@@ -90,7 +94,7 @@ pub struct DefaultSP {
 }
 
 #[derive(Clone, Copy)]
-pub struct GouraudSP {
+pub struct PhongSP {
     buffer: Buffer
 }
 
@@ -101,6 +105,11 @@ pub struct TrueNormalSP {
 
 #[derive(Clone, Copy)]
 pub struct SpecularSP {
+    buffer: Buffer
+}
+
+#[derive(Clone, Copy)]
+pub struct DarbouxSP {
     buffer: Buffer
 }
 
@@ -137,7 +146,7 @@ impl ShaderPipeline for DefaultSP {
             &(vertex_positions[2] - vertex_positions[0])
         );
         let t_face_normal = from_hom_vector(
-            self.buffer.it_direction_transform_matrix * to_hom_vector(face_normal)
+            self.buffer.it_mv_matrix * to_hom_vector(face_normal)
         ).normalize();
         let diff_coef = self.buffer.t_light_direction.dot(&t_face_normal);
 
@@ -148,17 +157,17 @@ impl ShaderPipeline for DefaultSP {
         ];
         
         for i in 0..3 {
-            let t_vertex_position = from_hom_point(
-                self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
+            let vertex_t_position = from_hom_point(
+                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
             );
             self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    t_vertex_position.x as i32,
-                    t_vertex_position.y as i32
+                    vertex_t_position.x as i32,
+                    vertex_t_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = t_vertex_position.z;
+            self.buffer.vertex_z_values[i] = vertex_t_position.z;
         }
 
         for i in 0..3 {
@@ -190,9 +199,9 @@ impl ShaderPipeline for DefaultSP {
     }
 }
 
-impl ShaderPipeline for GouraudSP {
+impl ShaderPipeline for PhongSP {
     fn new() -> Self {
-        return GouraudSP {
+        return PhongSP {
             buffer: Buffer::new(),
         };
     }
@@ -225,26 +234,26 @@ impl ShaderPipeline for GouraudSP {
                 model.obj.normals[normal_indices[i]].1,
                 model.obj.normals[normal_indices[i]].2
             ];
-            let t_vertex_normal = from_hom_vector(
-                self.buffer.it_direction_transform_matrix * to_hom_vector(vertex_normal)
+            let vertex_t_normal = from_hom_vector(
+                self.buffer.it_mv_matrix * to_hom_vector(vertex_normal)
             ).normalize();
             self.buffer.vertex_intensities[i] = self.buffer.t_light_direction.dot(
-                &t_vertex_normal
+                &vertex_t_normal
             );
         }
         
         for i in 0..3 {
-            let t_vertex_position = from_hom_point(
-                self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
+            let vertex_t_position = from_hom_point(
+                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
             );
             self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    t_vertex_position.x as i32,
-                    t_vertex_position.y as i32
+                    vertex_t_position.x as i32,
+                    vertex_t_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = t_vertex_position.z;
+            self.buffer.vertex_z_values[i] = vertex_t_position.z;
         }
 
         for i in 0..3 {
@@ -305,17 +314,17 @@ impl ShaderPipeline for TrueNormalSP {
         }
         
         for i in 0..3 {
-            let t_vertex_position = from_hom_point(
-                self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
+            let vertex_t_position = from_hom_point(
+                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
             );
             self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    t_vertex_position.x as i32,
-                    t_vertex_position.y as i32
+                    vertex_t_position.x as i32,
+                    vertex_t_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = t_vertex_position.z;
+            self.buffer.vertex_z_values[i] = vertex_t_position.z;
         }
 
         for i in 0..3 {
@@ -341,9 +350,8 @@ impl ShaderPipeline for TrueNormalSP {
         let uv = self.buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
-        // @TODO why whis does not work correctly?
         let t_fragment_normal = from_hom_vector(
-            self.buffer.it_direction_transform_matrix * to_hom_vector(fragment_normal)
+            self.buffer.it_mv_matrix * to_hom_vector(fragment_normal)
         ).normalize();
         let diff_coef = self.buffer.t_light_direction.dot(&t_fragment_normal);
         self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
@@ -381,17 +389,17 @@ impl ShaderPipeline for SpecularSP {
         }
         
         for i in 0..3 {
-            let t_vertex_position = from_hom_point(
-                self.buffer.vertex_transform_matrix * to_hom_point(vertex_positions[i])
+            let vertex_t_position = from_hom_point(
+                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
             );
             self.buffer.vertex_t_coords.set_column(
                 i,
                 &vector![
-                    t_vertex_position.x as i32,
-                    t_vertex_position.y as i32
+                    vertex_t_position.x as i32,
+                    vertex_t_position.y as i32
                 ]
             );
-            self.buffer.vertex_z_values[i] = t_vertex_position.z;
+            self.buffer.vertex_z_values[i] = vertex_t_position.z;
         }
 
         for i in 0..3 {
@@ -412,14 +420,12 @@ impl ShaderPipeline for SpecularSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Correcting texture color by intensity, where intensity is based on the normal, produced
-        // by the full normal map of the model.
+        // Using model of lighting, which accounts for reflected specular component.
         let uv = self.buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
-        // @TODO why whis does not work correctly?
         let t_fragment_normal = from_hom_vector(
-            self.buffer.it_direction_transform_matrix * to_hom_vector(fragment_normal)
+            self.buffer.it_mv_matrix * to_hom_vector(fragment_normal)
         ).normalize();
         // Important minus here - light direction is from source to 
         let reflected_light_direction = (
@@ -436,6 +442,129 @@ impl ShaderPipeline for SpecularSP {
             ((diff_coef + spec_coef) * color[2] as f32).min(255.0) as u8
         ];
         self.buffer.fragment_color = corrected_color;
+
+        return true;
+    }
+}
+
+impl ShaderPipeline for DarbouxSP {
+    fn new() -> Self {
+        return DarbouxSP {
+            buffer: Buffer::new(),
+        };
+    }
+
+    fn get_buffer(&self) -> &Buffer {
+        return &self.buffer;
+    }
+
+    fn get_buffer_mut(&mut self) -> &mut Buffer {
+        return &mut self.buffer;
+    }
+
+    fn vertex(
+        &mut self, 
+        model: &Model,         
+        pos_indices: Vector3<usize>,
+        tex_indices: Vector3<usize>,
+        normal_indices: Vector3<usize>
+    ) -> bool {
+        // Getting actual vertex coordinates from the model using given indices.
+        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
+        for i in 0..3 {
+            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
+            self.buffer.vertex_t_positions.set_column(i, &from_hom_point(
+                    self.buffer.mv_matrix * to_hom_point(vertex_positions[i])
+                )
+            );
+        }
+
+        // Collectin transformed normals at each vertex into a single matrix for subsequent interpolation
+        // in a fragment shader.
+        for i in 0..3 {
+            let vertex_normal = vector![
+                model.obj.normals[normal_indices[i]].0,
+                model.obj.normals[normal_indices[i]].1,
+                model.obj.normals[normal_indices[i]].2
+            ];
+            let vertex_t_normal = from_hom_vector(
+                self.buffer.it_mv_matrix * to_hom_vector(vertex_normal)
+            ).normalize();
+            self.buffer.vertex_t_normals.set_column(i, &vertex_t_normal);
+        }
+        
+        for i in 0..3 {
+            let vertex_t_position = from_hom_point(
+                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
+            );
+
+            self.buffer.vertex_t_coords.set_column(
+                i,
+                &vector![
+                    vertex_t_position.x as i32,
+                    vertex_t_position.y as i32
+                ]
+            );
+            self.buffer.vertex_z_values[i] = vertex_t_position.z;
+        }
+
+        for i in 0..3 {
+            self.buffer.vertex_uvs.set_column(
+                i, 
+                &vector![
+                    model.obj.tex_coords[tex_indices[i]].0,
+                    1.0 - model.obj.tex_coords[tex_indices[i]].1
+                ]
+            );
+        }
+
+        return true;
+    }
+
+    fn fragment(
+        &mut self, 
+        model: &Model,
+        bar_coord: Vector3<f32>
+    ) -> bool {
+        // Correcting texture color by intensity, where intensity is based on the normal, reconstructed from
+        // normal, stored in tangent coordinates.
+        let uv = self.buffer.vertex_uvs * bar_coord; 
+        let color = model.get_color_at_uv(uv);
+        let fragment_normal_tangent = model.get_normal_tangent_at_uv(uv);
+        // Calculating the matrix, giving required transformation from Darboux basis to the global one.
+        // A is a matrix with rows representing a local basis at each fragment.
+        let mut local_basis_matrix: Matrix3<f32> = Default::default();
+        let local_z = self.buffer.vertex_t_normals * bar_coord;
+        local_basis_matrix.set_row(
+            0, &(self.buffer.vertex_t_positions * vector![-1.0, 1.0, 0.0]).normalize().transpose()
+        );
+        local_basis_matrix.set_row(
+            1, &(self.buffer.vertex_t_positions * vector![-1.0, 0.0, 1.0]).normalize().transpose()
+        );
+        local_basis_matrix.set_row(
+            2, &(self.buffer.vertex_t_normals * bar_coord).normalize().transpose()
+        );
+
+        let i_local_basis_matrix = local_basis_matrix.try_inverse().unwrap();
+        let local_x = i_local_basis_matrix * vector![
+            self.buffer.vertex_uvs.m12 - self.buffer.vertex_uvs.m11,
+            self.buffer.vertex_uvs.m13 - self.buffer.vertex_uvs.m11,
+            0.0
+        ];
+        let local_y = i_local_basis_matrix * vector![
+            self.buffer.vertex_uvs.m22 - self.buffer.vertex_uvs.m21,
+            self.buffer.vertex_uvs.m23 - self.buffer.vertex_uvs.m21,
+            0.0
+        ];
+
+        let mut local_transform_matrix: Matrix3<f32> = Default::default();
+        local_transform_matrix.set_column(0, &local_x.normalize());
+        local_transform_matrix.set_column(1, &local_y.normalize());
+        local_transform_matrix.set_column(2, &local_z.normalize());
+
+        let t_fragment_normal = (local_transform_matrix * fragment_normal_tangent).normalize();
+        let diff_coef = self.buffer.t_light_direction.dot(&t_fragment_normal);
+        self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
     }

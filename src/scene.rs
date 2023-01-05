@@ -34,7 +34,8 @@ pub struct Model {
     pub obj: RawObj,
     pub texture: RgbImage,
     pub normal_map: RgbImage,
-    pub spec_map: RgbImage,
+    pub normal_map_tangent: RgbImage,
+    pub specular_map: RgbImage,
 }
 
 impl Model {
@@ -73,14 +74,29 @@ impl Model {
         ].normalize();
     }
 
+    /// Returns normalized normal from normal map in tangent coordinates at uv.
+    pub fn get_normal_tangent_at_uv(&self, uv: Vector2<f32>) -> Vector3<f32> {
+        let coord = vector![
+            (uv.x * self.normal_map.width() as f32) as u32,
+            (uv.y * self.normal_map.height() as f32) as u32
+        ];
+
+        // Subtracting 0.5 to get from [0, 255] to [-0.5, 0.5]
+        return vector![
+            (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[0]) as f32 / 255.0 - 0.5,
+            (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[1]) as f32 / 255.0 - 0.5,
+            (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[2]) as f32 / 255.0 - 0.5
+        ].normalize();
+    }
+
     /// Returns a [0, 1] from specular mpa at uv.
     pub fn get_specular_value_at_uv(&self, uv: Vector2<f32>) -> f32 {
         let coord = vector![
-            (uv.x * self.spec_map.width() as f32) as u32,
-            (uv.y * self.spec_map.height() as f32) as u32
+            (uv.x * self.specular_map.width() as f32) as u32,
+            (uv.y * self.specular_map.height() as f32) as u32
         ];
 
-        return self.spec_map.get_pixel(coord.x, coord.y).0[0] as f32;
+        return self.specular_map.get_pixel(coord.x, coord.y).0[0] as f32;
     }
 }
 
@@ -117,13 +133,15 @@ impl<T> Scene<T> where
         obj: RawObj,
         texture: RgbImage,
         normal_map: RgbImage,
-        spec_map: RgbImage
+        normal_map_tangent: RgbImage,
+        specular_map: RgbImage
     ) -> Self {
         let model = Model {
             obj,
             texture,
             normal_map,
-            spec_map,
+            normal_map_tangent,
+            specular_map,
         };
         let shader_pipeline = T::new();
         let light_direction = vector![0.0, 0.0, -1.0];  // Directed from us to the screen.
@@ -220,15 +238,15 @@ impl<T> Scene<T> where
 
         // Preparing shader pipeline for the render pass.
         let buffer = self.shader_pipeline.get_buffer_mut();
-        buffer.vertex_transform_matrix = viewport_matrix *
+        buffer.vpmv_matrix = viewport_matrix *
                                          projection_matrix * 
                                          model_matrix * 
                                          view_matrix;
-        buffer.direction_transform_matrix = model_matrix * view_matrix;
+        buffer.mv_matrix = model_matrix * view_matrix;
         // Not interested in projection and rasterization, when transformaing light direction and normals.
-        buffer.it_direction_transform_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();       
+        buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();       
         buffer.t_light_direction = from_hom_vector(
-            buffer.direction_transform_matrix * to_hom_vector(self.light_direction)
+            buffer.mv_matrix * to_hom_vector(self.light_direction)
         ).normalize();
     }
 
@@ -308,7 +326,7 @@ impl<T> Scene<T> where
                 vector![indices[0].1, indices[1].1, indices[2].1],
                 vector![indices[0].2, indices[1].2, indices[2].2]               
             ) {
-                // Vertex shader decided, that whole polygon wouldn't be rendered.
+                // Vertex shader decided, that whole polygon shouldn't be rendered.
                 continue;
             }
 
@@ -329,24 +347,21 @@ impl<T> Scene<T> where
                         continue;
                     }
 
+                    // z-buffer section - checking fragment z-value in the pipeline buffer and comparing it
+                    // to the value in the buffer, on failure skipping the pixel, else updating buffer and
+                    // invoking the fragment part of the pipeline.
                     let vertex_z_values = self.shader_pipeline.get_buffer().vertex_z_values;
-                    let z_to_screen = bar_coord.dot(&vertex_z_values);                    
-
-                    // Checking z-buffer, on failure skipping the pixel.
+                    let z_to_screen = bar_coord.dot(&vertex_z_values); 
                     if z_to_screen <= self.z_buffer[pixel_index] {
                         continue;
                     }
-
-                    // z-buffer check is passed, so setting the pixel and new z-buffer value.
                     self.z_buffer[pixel_index] = z_to_screen;
 
-                    // Fragment shader has an ability to skip a pixel.
+                    // If fragment shader returns true, getting color from the pipeline and coloring the
+                    // pixel.
                     if !self.shader_pipeline.fragment(&self.model, bar_coord) {
                         continue;
                     }
-
-                    // If fragment shader returned true, taking fragment color form the buffer and coloring
-                    // in the appropriate pixel.
                     let fragment_color = self.shader_pipeline.get_buffer().fragment_color;
                     self.render_data[3 * pixel_index + 0] = fragment_color.x;
                     self.render_data[3 * pixel_index + 1] = fragment_color.y;

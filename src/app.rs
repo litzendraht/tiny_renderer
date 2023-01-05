@@ -9,7 +9,7 @@ use nalgebra as na;
 use na::vector;
 
 use crate::scene::Scene;
-use crate::shader::{ShaderPipeline, DefaultSP, GouraudSP, TrueNormalSP, SpecularSP};
+use crate::shader::{ShaderPipeline, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
 
 // @TODO redo asset_path to be an actual Path object somehow
 pub struct Params {
@@ -37,7 +37,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let obj_path = params.asset_path.clone() + "/model.obj";
     let texture_path = params.asset_path.clone() + "/texture.tga";
     let normal_map_path = params.asset_path.clone() + "/normal_map.tga";
-    let spec_map_path = params.asset_path.clone() + "/spec_map.tga";
+    let normal_map_tangent_path = params.asset_path.clone() + "/normal_map_tangent.tga";
+    let specular_map_path = params.asset_path.clone() + "/specular_map.tga";
 
     println!("Loading model from: {}", obj_path);
     let obj = parse_obj(BufReader::new(File::open(obj_path)?))?;
@@ -52,14 +53,23 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let normal_map = image::open(normal_map_path)?.into_rgb8();
     println!("Dimensions of loaded normal map are: {} x {}", normal_map.width(), normal_map.height());
 
-    println!("Loading specular map from: {}", spec_map_path);
-    let spec_map = image::open(spec_map_path)?.into_rgb8();
-    println!("Dimensions of loaded specular map are: {} x {}", spec_map.width(), spec_map.height());
+    println!("Loading normal map in tangent coordinates from: {}", normal_map_tangent_path);
+    let normal_map_tangent = image::open(normal_map_tangent_path)?.into_rgb8();
+    println!("Dimensions of loaded normal map in tangent coordinates are: {} x {}", normal_map.width(), normal_map.height());
 
-    // let mut scene = Scene::<DefaultSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
-    // let mut scene = Scene::<GouraudSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
-    // let mut scene = Scene::<TrueNormalSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
-    let mut scene = Scene::<SpecularSP>::new(params.width, params.height, obj, texture, normal_map, spec_map);
+    println!("Loading specular map from: {}", specular_map_path);
+    let specular_map = image::open(specular_map_path)?.into_rgb8();
+    println!("Dimensions of loaded specular map are: {} x {}", specular_map.width(), specular_map.height());
+
+    let mut scene = Scene::<DarbouxSP>::new(
+        params.width, 
+        params.height, 
+        obj, 
+        texture, 
+        normal_map,
+        normal_map_tangent, 
+        specular_map
+    );
 
     let window_options: WindowOptions = WindowOptions {
         size: Some([params.width, params.height]),

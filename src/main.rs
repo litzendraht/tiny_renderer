@@ -12,7 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         print_fps: true,
-        asset_path: String::from("assets/african_head"),
+        // asset_path: String::from("assets/african_head"),
+        asset_path: String::from("assets/diablo"),
     };
 
     app::run(params)?;
