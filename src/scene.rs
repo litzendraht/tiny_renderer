@@ -1,33 +1,15 @@
+mod util;
+use util::{to_hom_vector, from_hom_vector};
+pub mod shader;
+pub use self::shader::{ShaderPipeline, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
+
 use std::cmp::{min, max};
 
 use obj::raw::RawObj;
 use obj::raw::object::Polygon;
 use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, Vector4, matrix, Matrix2x3};
-
-use crate::shader::ShaderPipeline;
-
-// @TODO remove double definition.
-/// Transformation of a point to homogenous coordinates.
-fn to_hom_point(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 1.0];
-}
-
-/// Transformation of a vector to homogenous coordinates.
-fn to_hom_vector(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 0.0];
-}
-
-/// Transformation of a point from homogenous coordinates.
-fn from_hom_point(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x / v.w, v.y / v.w, v.z / v.w];
-}
-
-/// Transformation of a vector from homogenous coordinates.
-fn from_hom_vector(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x, v.y, v.z];
-}
+use na::{vector, Vector2, Vector3, matrix, Matrix2x3};
 
 /// Struct, holding all information about the model, including geometry, texture and normal and specular maps.
 pub struct Model {
@@ -206,10 +188,11 @@ impl<T> Scene<T> where
     /// Recalculating model, view, projection and viewport matrices to be used when drawing primitives.
     /// look_from is camera position, look_at defines directon.
     pub fn prepare_render(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
-        // New coordinate system around camera position, with z
-        let b = up.normalize();
+        // New coordinate system a, b, c around camera position.
+        // @TODO figure out consistent naming for basis vectors.
         let c = (look_from - look_at).normalize();
-        let a = up.cross(&c).normalize();        
+        let b = (up - c.dot(&up) * c).normalize();
+        let a = b.cross(&c).normalize();        
         let model_matrix = matrix![a.x, a.y, a.z, 0.0;
                                    b.x, b.y, b.z, 0.0;
                                    c.x, c.y, c.z, 0.0;
@@ -248,18 +231,6 @@ impl<T> Scene<T> where
         buffer.t_light_direction = from_hom_vector(
             buffer.mv_matrix * to_hom_vector(self.light_direction)
         ).normalize();
-    }
-
-    /// Sets Scene pixel to a color at specifed coordinate.
-    /// 
-    /// Assumes, that pixel data is rgb8.
-    pub fn set_pixel(&mut self, p: Vector2<i32>, color: Vector3<u8>) {
-        // Pixel data is rgb8, so we find the starting pixel_index of a 3-tuple and do 3 assignments.
-        // @OPTI maybe I can set 3 values simultaneously somehow?
-        let pixel_index = (3 * (p.x + p.y * self.width as i32)) as usize;
-        self.render_data[pixel_index + 0] = color.x;
-        self.render_data[pixel_index + 1] = color.y;
-        self.render_data[pixel_index + 2] = color.z;
     }
 
     pub fn render(&mut self) {

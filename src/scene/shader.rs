@@ -1,41 +1,14 @@
 // @TODO no culling at the momement, drawing every face, maybe worth fixing.
+use super::util::{to_hom_point, from_hom_point, to_hom_vector, from_hom_vector, color_blend};
 
 use nalgebra as na;
-use na::{vector, Vector3, Vector4, Matrix3, Matrix4, Matrix2x3};
+use na::{vector, Vector3, Matrix3, Matrix4, Matrix2x3};
 
 use crate::scene::Model;
 
-/// Utility for getting convex combination of 2 Vector3<u8>'s
-fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
-    return vector![
-        (t * color_1.x as f32 + (1.0 - t) * color_2.x as f32) as u8,
-        (t * color_1.y as f32 + (1.0 - t) * color_2.y as f32) as u8,
-        (t * color_1.z as f32 + (1.0 - t) * color_2.z as f32) as u8
-    ];
-}
-
-/// Transformation of a point to homogenous coordinates.
-fn to_hom_point(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 1.0];
-}
-
-/// Transformation of a vector to homogenous coordinates.
-fn to_hom_vector(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 0.0];
-}
-
-/// Transformation of a point from homogenous coordinates.
-fn from_hom_point(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x / v.w, v.y / v.w, v.z / v.w];
-}
-
-/// Transformation of a vector from homogenous coordinates.
-fn from_hom_vector(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x, v.y, v.z];
-}
-
-/// Pipeline, which defines "vertex" and "fragment" shaders as 2 methods and holds some values in order to pass them
-/// between those methods, when applied in a scene. Methods require information about the model being rendered.
+/// Pipeline, which defines "vertex" and "fragment" shaders as 2 methods and holds some values in a buffer 
+/// in order to pass them between those methods, when applied in a scene. 
+/// Methods require information about the model being rendered.
 pub trait ShaderPipeline {
     fn new() -> Self;
     fn get_buffer(&self) -> &Buffer;
@@ -50,7 +23,7 @@ pub trait ShaderPipeline {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>      
     ) -> bool;
-    /// "Fragment" shader, taking a texture and barycendric coordinates of a fragment.
+    /// "Fragment" shader, taking model struct and barycendric coordinates of a fragment.
     fn fragment(
         &mut self,
         model: &Model,
@@ -64,20 +37,20 @@ pub trait ShaderPipeline {
 // @TODO not all buffer is used in every shader, but for simplicity it just has all options. Maybe
 // worth thinking about how to get a more fine-grained buffer structure for each shader.
 pub struct Buffer {
-    pub camera_direction:              Vector3<f32>,
-    pub t_light_direction:             Vector3<f32>,   // Light direction with model and view transformations applied.
-    pub vpmv_matrix:                   Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
-    pub mv_matrix:                     Matrix4<f32>,   // Applied to light direction.
-    pub it_mv_matrix:                  Matrix4<f32>,   // Applied to model normals.
+    pub camera_direction:  Vector3<f32>,
+    pub t_light_direction: Vector3<f32>,   // Light direction with model and view transformations applied.
+    pub vpmv_matrix:       Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
+    pub mv_matrix:         Matrix4<f32>,   // Applied to light direction.
+    pub it_mv_matrix:      Matrix4<f32>,   // Applied to model normals.
     // Local buffer for passing values between vertex and fragment parts of the pipeline.    
-    pub vertex_intensities:            Vector3<f32>,   // Light intensity in each vertex of a polygon.
-    pub vertex_t_positions:            Matrix3<f32>,   // Transformed vertex positions as columns.
-    pub vertex_t_coords:               Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
-    pub vertex_t_normals:              Matrix3<f32>,   // Transformed vertex normals at each vertex as columns.
-    pub vertex_z_values:               Vector3<f32>,   // Value used for comparison with existing z-buffer values.
-    pub vertex_uvs:                    Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex as columns.
+    vertex_intensities:    Vector3<f32>,   // Light intensity in each vertex of a polygon.
+    vertex_t_positions:    Matrix3<f32>,   // Transformed vertex positions as columns.
+    vertex_t_normals:      Matrix3<f32>,   // Transformed vertex normals at each vertex as columns.
+    vertex_uvs:            Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex as columns.
+    pub vertex_t_coords:   Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
+    pub vertex_z_values:   Vector3<f32>,   // Value used for comparison with existing z-buffer values.
     // Access to color after application of fragment shader.
-    pub fragment_color:                Vector3<u8> 
+    pub fragment_color:    Vector3<u8> 
 }
 
 impl Buffer {
@@ -113,6 +86,47 @@ pub struct DarbouxSP {
     buffer: Buffer
 }
 
+/// Boilerplate for moving uvs to a 2x3 matrix buffer.
+fn store_vertex_uvs(
+    uvs_buffer: &mut Matrix2x3<f32>, 
+    tex_coords: &Vec<(f32, f32, f32)>,
+    indices: Vector3<usize>
+) {
+    for i in 0..3 {
+        uvs_buffer.set_column(
+            i, 
+            &vector![
+                tex_coords[indices[i]].0,
+                1.0 - tex_coords[indices[i]].1
+            ]
+        );
+    }
+}
+
+/// Boilerplate for transforming and moving vertex information, namely screen coords and z-values into buffers.
+fn store_vertex_transformation_results(
+    vertex_positions: [Vector3<f32>; 3],
+    vpmv_matrix: Matrix4<f32>,
+    t_coords_buffer: &mut Matrix2x3<i32>, 
+    z_values_buffer: &mut Vector3<f32>
+) {
+    for i in 0..3 {
+        let vertex_t_position = from_hom_point(
+            vpmv_matrix * to_hom_point(vertex_positions[i])
+        );
+        t_coords_buffer.set_column(
+            i,
+            &vector![
+                vertex_t_position.x as i32,
+                vertex_t_position.y as i32
+            ]
+        );
+        z_values_buffer[i] = vertex_t_position.z;
+    }
+}
+
+/// Pipeline calculates normal for a face and corrects diffuse texture color for a fragment by using
+/// intensity based on the dot product between light direction and face normal.
 impl ShaderPipeline for DefaultSP {
     fn new() -> Self {
         return DefaultSP {
@@ -135,7 +149,6 @@ impl ShaderPipeline for DefaultSP {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
     ) -> bool {
-        // Getting actual vertex coordinates from the model using given indices.
         let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
@@ -150,35 +163,15 @@ impl ShaderPipeline for DefaultSP {
         ).normalize();
         let diff_coef = self.buffer.t_light_direction.dot(&t_face_normal);
 
-        self.buffer.vertex_intensities = vector![
-            diff_coef, 
-            diff_coef, 
-            diff_coef
-        ];
-        
-        for i in 0..3 {
-            let vertex_t_position = from_hom_point(
-                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
-            );
-            self.buffer.vertex_t_coords.set_column(
-                i,
-                &vector![
-                    vertex_t_position.x as i32,
-                    vertex_t_position.y as i32
-                ]
-            );
-            self.buffer.vertex_z_values[i] = vertex_t_position.z;
-        }
+        self.buffer.vertex_intensities = vector![diff_coef, diff_coef, diff_coef];
 
-        for i in 0..3 {
-            self.buffer.vertex_uvs.set_column(
-                i, 
-                &vector![
-                    model.obj.tex_coords[tex_indices[i]].0,
-                    1.0 - model.obj.tex_coords[tex_indices[i]].1
-                ]
-            );
-        }
+        store_vertex_transformation_results(
+            vertex_positions,
+            self.buffer.vpmv_matrix, 
+            &mut self.buffer.vertex_t_coords, 
+            &mut self.buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut self.buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
     }
@@ -188,8 +181,6 @@ impl ShaderPipeline for DefaultSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Correcting texture color by intensity, but in this pipeline normal is just a face normal, so
-        // intensities are all equal and we can just take one at index 0 in vertex_intensities vector.
         let uv = self.buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
         let diff_coef = self.buffer.vertex_intensities[0];
@@ -199,6 +190,8 @@ impl ShaderPipeline for DefaultSP {
     }
 }
 
+/// Pipeline interpolates fragment normal by using barycentric coordinates and vertex normals
+/// and corrects fragment color using resulting light intensity.
 impl ShaderPipeline for PhongSP {
     fn new() -> Self {
         return PhongSP {
@@ -221,7 +214,6 @@ impl ShaderPipeline for PhongSP {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
     ) -> bool {
-        // Getting actual vertex coordinates from the model using given indices.
         let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
@@ -242,29 +234,13 @@ impl ShaderPipeline for PhongSP {
             );
         }
         
-        for i in 0..3 {
-            let vertex_t_position = from_hom_point(
-                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
-            );
-            self.buffer.vertex_t_coords.set_column(
-                i,
-                &vector![
-                    vertex_t_position.x as i32,
-                    vertex_t_position.y as i32
-                ]
-            );
-            self.buffer.vertex_z_values[i] = vertex_t_position.z;
-        }
-
-        for i in 0..3 {
-            self.buffer.vertex_uvs.set_column(
-                i, 
-                &vector![
-                    model.obj.tex_coords[tex_indices[i]].0,
-                    1.0 - model.obj.tex_coords[tex_indices[i]].1
-                ]
-            );
-        }
+        store_vertex_transformation_results(
+            vertex_positions,
+            self.buffer.vpmv_matrix, 
+            &mut self.buffer.vertex_t_coords, 
+            &mut self.buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut self.buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
     }
@@ -274,8 +250,6 @@ impl ShaderPipeline for PhongSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Correcting texture color by intensity, where intensity is based on the interpolated normal
-        // between the vertex_positions, which is produced via barycentric coordinates of the fragment.
         let uv = self.buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
         let diff_coef = bar_coord.dot(&self.buffer.vertex_intensities);
@@ -285,6 +259,7 @@ impl ShaderPipeline for PhongSP {
     }
 }
 
+/// Pipeline corrects fragemnt color by using the normal, provided by the normal map of the model.
 impl ShaderPipeline for TrueNormalSP {
     fn new() -> Self {
         return TrueNormalSP {
@@ -307,35 +282,18 @@ impl ShaderPipeline for TrueNormalSP {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
     ) -> bool {
-        // Getting actual vertex coordinates from the model using given indices.
         let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
         }
         
-        for i in 0..3 {
-            let vertex_t_position = from_hom_point(
-                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
-            );
-            self.buffer.vertex_t_coords.set_column(
-                i,
-                &vector![
-                    vertex_t_position.x as i32,
-                    vertex_t_position.y as i32
-                ]
-            );
-            self.buffer.vertex_z_values[i] = vertex_t_position.z;
-        }
-
-        for i in 0..3 {
-            self.buffer.vertex_uvs.set_column(
-                i, 
-                &vector![
-                    model.obj.tex_coords[tex_indices[i]].0,
-                    1.0 - model.obj.tex_coords[tex_indices[i]].1
-                ]
-            );
-        }
+        store_vertex_transformation_results(
+            vertex_positions,
+            self.buffer.vpmv_matrix, 
+            &mut self.buffer.vertex_t_coords, 
+            &mut self.buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut self.buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
     }
@@ -345,8 +303,6 @@ impl ShaderPipeline for TrueNormalSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Correcting texture color by intensity, where intensity is based on the normal, produced
-        // by the full normal map of the model.
         let uv = self.buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
@@ -360,6 +316,7 @@ impl ShaderPipeline for TrueNormalSP {
     }
 }
 
+/// Pipeline calculates fragment color using a model accounting for a reflected specular light component.
 impl ShaderPipeline for SpecularSP {
     fn new() -> Self {
         return SpecularSP {
@@ -382,35 +339,18 @@ impl ShaderPipeline for SpecularSP {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
     ) -> bool {
-        // Getting actual vertex coordinates from the model using given indices.
         let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
         }
         
-        for i in 0..3 {
-            let vertex_t_position = from_hom_point(
-                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
-            );
-            self.buffer.vertex_t_coords.set_column(
-                i,
-                &vector![
-                    vertex_t_position.x as i32,
-                    vertex_t_position.y as i32
-                ]
-            );
-            self.buffer.vertex_z_values[i] = vertex_t_position.z;
-        }
-
-        for i in 0..3 {
-            self.buffer.vertex_uvs.set_column(
-                i, 
-                &vector![
-                    model.obj.tex_coords[tex_indices[i]].0,
-                    1.0 - model.obj.tex_coords[tex_indices[i]].1
-                ]
-            );
-        }
+        store_vertex_transformation_results(
+            vertex_positions,
+            self.buffer.vpmv_matrix, 
+            &mut self.buffer.vertex_t_coords, 
+            &mut self.buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut self.buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
     }
@@ -420,7 +360,6 @@ impl ShaderPipeline for SpecularSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Using model of lighting, which accounts for reflected specular component.
         let uv = self.buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
@@ -447,6 +386,7 @@ impl ShaderPipeline for SpecularSP {
     }
 }
 
+/// Pipeline using normals stored in Darboux frame for color intensity calculation.
 impl ShaderPipeline for DarbouxSP {
     fn new() -> Self {
         return DarbouxSP {
@@ -469,17 +409,17 @@ impl ShaderPipeline for DarbouxSP {
         tex_indices: Vector3<usize>,
         normal_indices: Vector3<usize>
     ) -> bool {
-        // Getting actual vertex coordinates from the model using given indices.
         let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
         for i in 0..3 {
             vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
+            // Collecting transformed vertex positions in a buffer to use in local basis calculation.
             self.buffer.vertex_t_positions.set_column(i, &from_hom_point(
                     self.buffer.mv_matrix * to_hom_point(vertex_positions[i])
                 )
             );
         }
 
-        // Collectin transformed normals at each vertex into a single matrix for subsequent interpolation
+        // Collecting transformed normals at each vertex into a single matrix for subsequent interpolation
         // in a fragment shader.
         for i in 0..3 {
             let vertex_normal = vector![
@@ -493,30 +433,13 @@ impl ShaderPipeline for DarbouxSP {
             self.buffer.vertex_t_normals.set_column(i, &vertex_t_normal);
         }
         
-        for i in 0..3 {
-            let vertex_t_position = from_hom_point(
-                self.buffer.vpmv_matrix * to_hom_point(vertex_positions[i])
-            );
-
-            self.buffer.vertex_t_coords.set_column(
-                i,
-                &vector![
-                    vertex_t_position.x as i32,
-                    vertex_t_position.y as i32
-                ]
-            );
-            self.buffer.vertex_z_values[i] = vertex_t_position.z;
-        }
-
-        for i in 0..3 {
-            self.buffer.vertex_uvs.set_column(
-                i, 
-                &vector![
-                    model.obj.tex_coords[tex_indices[i]].0,
-                    1.0 - model.obj.tex_coords[tex_indices[i]].1
-                ]
-            );
-        }
+        store_vertex_transformation_results(
+            vertex_positions,
+            self.buffer.vpmv_matrix, 
+            &mut self.buffer.vertex_t_coords, 
+            &mut self.buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut self.buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
     }
@@ -526,8 +449,6 @@ impl ShaderPipeline for DarbouxSP {
         model: &Model,
         bar_coord: Vector3<f32>
     ) -> bool {
-        // Correcting texture color by intensity, where intensity is based on the normal, reconstructed from
-        // normal, stored in tangent coordinates.
         let uv = self.buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal_tangent = model.get_normal_tangent_at_uv(uv);
@@ -561,8 +482,8 @@ impl ShaderPipeline for DarbouxSP {
         local_transform_matrix.set_column(0, &local_x.normalize());
         local_transform_matrix.set_column(1, &local_y.normalize());
         local_transform_matrix.set_column(2, &local_z.normalize());
-
         let t_fragment_normal = (local_transform_matrix * fragment_normal_tangent).normalize();
+        
         let diff_coef = self.buffer.t_light_direction.dot(&t_fragment_normal);
         self.buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 

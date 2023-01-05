@@ -4,12 +4,11 @@ use std::io::BufReader;
 use std::path::Path;
 
 use show_image::{WindowOptions, ImageView, ImageInfo, event, create_window};
-use obj::raw::{parse_obj};
+use obj::raw::parse_obj;
 use nalgebra as na;
 use na::vector;
 
-use crate::scene::Scene;
-use crate::shader::{ShaderPipeline, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
+use crate::scene::{Scene, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
 
 // @TODO redo asset_path to be an actual Path object somehow
 pub struct Params {
