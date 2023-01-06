@@ -8,14 +8,15 @@ use obj::raw::parse_obj;
 use nalgebra as na;
 use na::vector;
 
-use crate::scene::{Scene, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
+use crate::scene::Scene;
 
 // @TODO redo asset_path to be an actual Path object somehow
 pub struct Params {
-    pub width: u32,
-    pub height: u32,
-    pub print_fps: bool,
-    pub asset_path: String,
+    pub width:                u32,
+    pub height:               u32,
+    pub print_fps:            bool,
+    pub asset_path:           String,
+    pub shader_pipeline_name: &'static str,
 }
 
 /// Helper, defining exit event to be an Escape key press.
@@ -60,14 +61,20 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let specular_map = image::open(specular_map_path)?.into_rgb8();
     println!("Dimensions of loaded specular map are: {} x {}", specular_map.width(), specular_map.height());
 
-    let mut scene = Scene::<DarbouxSP>::new(
+    // let shader_pipeline_name = "default";
+    let shader_pipeline_name = "phong";
+    // let shader_pipeline_name = "true_normal";
+    // let shader_pipeline_name = "specular";
+    // let shader_pipeline_name = "darboux";
+    let mut scene = Scene::new(
         params.width, 
         params.height, 
         obj, 
         texture, 
         normal_map,
         normal_map_tangent, 
-        specular_map
+        specular_map,
+        params.shader_pipeline_name
     );
 
     let window_options: WindowOptions = WindowOptions {
@@ -95,7 +102,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         // let look_from = vector![0.0, 0.0, 1.0];
         let look_at = vector![0.0, 0.0, 0.0];
         let up = vector![0.0, 1.0, 0.0];
-        // Setting up the light. Direction is from surface to source, so negative of true direction.
+        // Setting up the light. Direction is FROM surface TO source, so negative of true direction.
         // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
         // scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
         scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());

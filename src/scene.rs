@@ -1,7 +1,7 @@
 mod util;
 use util::{to_hom_vector, from_hom_vector};
 pub mod shader;
-pub use self::shader::{ShaderPipeline, DefaultSP, PhongSP, TrueNormalSP, SpecularSP, DarbouxSP};
+pub use self::shader::ShaderPipeline;
 
 use std::cmp::{min, max};
 
@@ -85,14 +85,13 @@ impl Model {
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
 /// (0, 0) is the bottom left coordinate.
-pub struct Scene<T> where 
-    T: ShaderPipeline 
+pub struct Scene
 {
     width: u32,
     height: u32,
     model: Model,
     // Pipeline, specifying vertex and fragment shaders
-    shader_pipeline: T,
+    shader_pipeline: ShaderPipeline,
     // Scene settings.
     light_direction: Vector3<f32>,
     // z-buffer, which continuously fills out after clear() call with every new primitive drawn.
@@ -104,19 +103,19 @@ pub struct Scene<T> where
     render_data: Vec<u8>,
 }
 
-impl<T> Scene<T> where
-    T: ShaderPipeline
+impl Scene
 {
     /// Generates new Scene struct with specified width and height.
     /// Pixel data format is assumed to be rgb8.
     pub fn new(
-        width: u32, 
-        height: u32,
-        obj: RawObj,
-        texture: RgbImage,
-        normal_map: RgbImage,
-        normal_map_tangent: RgbImage,
-        specular_map: RgbImage
+        width:                u32, 
+        height:               u32,
+        obj:                  RawObj,
+        texture:              RgbImage,
+        normal_map:           RgbImage,
+        normal_map_tangent:   RgbImage,
+        specular_map:         RgbImage,
+        shader_pipeline_name: &str
     ) -> Self {
         let model = Model {
             obj,
@@ -125,7 +124,7 @@ impl<T> Scene<T> where
             normal_map_tangent,
             specular_map,
         };
-        let shader_pipeline = T::new();
+        let shader_pipeline = ShaderPipeline::new(shader_pipeline_name);
         let light_direction = vector![0.0, 0.0, -1.0];  // Directed from us to the screen.
         let n_pixels = (width * height) as usize;
         let z_buffer: Vec<f32>   = vec![f32::MIN; n_pixels];
@@ -190,13 +189,13 @@ impl<T> Scene<T> where
     pub fn prepare_render(&mut self, look_from: Vector3<f32>, look_at: Vector3<f32>, up: Vector3<f32>) {
         // New coordinate system a, b, c around camera position.
         // @TODO figure out consistent naming for basis vectors.
-        let c = (look_from - look_at).normalize();
-        let b = (up - c.dot(&up) * c).normalize();
-        let a = b.cross(&c).normalize();        
-        let model_matrix = matrix![a.x, a.y, a.z, 0.0;
-                                   b.x, b.y, b.z, 0.0;
-                                   c.x, c.y, c.z, 0.0;
-                                   0.0, 0.0, 0.0, 1.0];
+        let new_z = (look_from - look_at).normalize();
+        let new_y = (up - new_z.dot(&up) * new_z).normalize();
+        let new_x = new_y.cross(&new_z).normalize();        
+        let model_matrix = matrix![new_x.x, new_x.y, new_x.z, 0.0;
+                                   new_y.x, new_y.y, new_y.z, 0.0;
+                                   new_z.x, new_z.y, new_z.z, 0.0;
+                                   0.0,     0.0,     0.0,     1.0];
         let view_matrix = matrix![1.0, 0.0, 0.0, -look_from.x;
                                   0.0, 1.0, 0.0, -look_from.y;
                                   0.0, 0.0, 1.0, -look_from.z;
@@ -220,14 +219,15 @@ impl<T> Scene<T> where
                                       0.0,     0.0,     0.0,     1.0];
 
         // Preparing shader pipeline for the render pass.
-        let buffer = self.shader_pipeline.get_buffer_mut();
+        let mut buffer = &mut self.shader_pipeline.buffer;
         buffer.vpmv_matrix = viewport_matrix *
                                          projection_matrix * 
                                          model_matrix * 
                                          view_matrix;
         buffer.mv_matrix = model_matrix * view_matrix;
         // Not interested in projection and rasterization, when transformaing light direction and normals.
-        buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();       
+        buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();
+        buffer.camera_direction = new_z;   
         buffer.t_light_direction = from_hom_vector(
             buffer.mv_matrix * to_hom_vector(self.light_direction)
         ).normalize();
@@ -280,63 +280,67 @@ impl<T> Scene<T> where
             ];
         }
 
-        // Drawing all polygons of the model.
-        for polygon in &self.model.obj.polygons {
-            // Indices are &Vec((usize, usize, usize)), where first item corresponds to indices for
-            // positions, second to indices for texture uv coords and third to indices for normals
-            // which results in a bloated call to vertex shader.
-            // @TODO make it not bloated.
-            let indices: &Vec<(usize, usize, usize)> = match polygon {
-                Polygon::PTN(indices) => &indices,
-                _ => panic!("Encountered some garbage, while looking through polygons."),
-            };
+        // Applying all passes of the shader pipeline.
+        for pass in &self.shader_pipeline.passes {
+            // Drawing all polygons of the model.
+            for polygon in &self.model.obj.polygons {
+                // Indices are &Vec((usize, usize, usize)), where first item corresponds to indices for
+                // positions, second to indices for texture uv coords and third to indices for normals
+                // which results in a bloated call to vertex shader.
+                // @TODO make it not bloated.
+                let indices: &Vec<(usize, usize, usize)> = match polygon {
+                    Polygon::PTN(indices) => &indices,
+                    _ => panic!("Encountered some garbage, while looking through polygons."),
+                };
 
-            if !self.shader_pipeline.vertex(
-                &self.model,
-                vector![indices[0].0, indices[1].0, indices[2].0],
-                vector![indices[0].1, indices[1].1, indices[2].1],
-                vector![indices[0].2, indices[1].2, indices[2].2]               
-            ) {
-                // Vertex shader decided, that whole polygon shouldn't be rendered.
-                continue;
-            }
+                if !(pass.vertex)(
+                    &mut self.shader_pipeline.buffer,
+                    &self.model,
+                    vector![indices[0].0, indices[1].0, indices[2].0],
+                    vector![indices[0].1, indices[1].1, indices[2].1],
+                    vector![indices[0].2, indices[1].2, indices[2].2]               
+                ) {
+                    // Vertex shader decided, that whole polygon shouldn't be rendered.
+                    continue;
+                }
 
-            let vertex_t_coords = self.shader_pipeline.get_buffer().vertex_t_coords;
-            let bbox = get_triangle_bounding_box(vertex_t_coords);
+                let vertex_t_coords = self.shader_pipeline.buffer.vertex_t_coords;
+                let bbox = get_triangle_bounding_box(vertex_t_coords);
 
-            // Accounting for possibility that bbox can reach outside of the screen.
-            for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
-                for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
-                    let pixel_index = (i + j * self.width as i32) as usize;
-                    let bar_coord = to_barycentric_coord(
-                        vector![i, j], 
-                        vertex_t_coords
-                    );
+                // Accounting for possibility that bbox can reach outside of the screen.
+                for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
+                    for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
+                        let pixel_index = (i + j * self.width as i32) as usize;
+                        let bar_coord = to_barycentric_coord(
+                            vector![i, j], 
+                            vertex_t_coords
+                        );
 
-                    // If any of the coordinates are negative, point is not in the triangle, so skipping it.
-                    if bar_coord.x < 0.0 || bar_coord.y < 0.0 || bar_coord.z < 0.0 {
-                        continue;
+                        // If any of the coordinates are negative, point is not in the triangle, so skipping it.
+                        if bar_coord.x < 0.0 || bar_coord.y < 0.0 || bar_coord.z < 0.0 {
+                            continue;
+                        }
+
+                        // z-buffer section - checking fragment z-value in the pipeline buffer and comparing it
+                        // to the value in the buffer, on failure skipping the pixel, else updating buffer and
+                        // invoking the fragment part of the pipeline.
+                        let vertex_z_values = self.shader_pipeline.buffer.vertex_z_values;
+                        let z_to_screen = bar_coord.dot(&vertex_z_values); 
+                        if z_to_screen <= self.z_buffer[pixel_index] {
+                            continue;
+                        }
+                        self.z_buffer[pixel_index] = z_to_screen;
+
+                        // If fragment shader returns true, getting color from the pipeline and coloring the
+                        // pixel.
+                        if !(pass.fragment)(&mut self.shader_pipeline.buffer, &self.model, bar_coord) {
+                            continue;
+                        }
+                        let fragment_color = self.shader_pipeline.buffer.fragment_color;
+                        self.render_data[3 * pixel_index + 0] = fragment_color.x;
+                        self.render_data[3 * pixel_index + 1] = fragment_color.y;
+                        self.render_data[3 * pixel_index + 2] = fragment_color.z;
                     }
-
-                    // z-buffer section - checking fragment z-value in the pipeline buffer and comparing it
-                    // to the value in the buffer, on failure skipping the pixel, else updating buffer and
-                    // invoking the fragment part of the pipeline.
-                    let vertex_z_values = self.shader_pipeline.get_buffer().vertex_z_values;
-                    let z_to_screen = bar_coord.dot(&vertex_z_values); 
-                    if z_to_screen <= self.z_buffer[pixel_index] {
-                        continue;
-                    }
-                    self.z_buffer[pixel_index] = z_to_screen;
-
-                    // If fragment shader returns true, getting color from the pipeline and coloring the
-                    // pixel.
-                    if !self.shader_pipeline.fragment(&self.model, bar_coord) {
-                        continue;
-                    }
-                    let fragment_color = self.shader_pipeline.get_buffer().fragment_color;
-                    self.render_data[3 * pixel_index + 0] = fragment_color.x;
-                    self.render_data[3 * pixel_index + 1] = fragment_color.y;
-                    self.render_data[3 * pixel_index + 2] = fragment_color.z;
                 }
             }
         }

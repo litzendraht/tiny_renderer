@@ -13,6 +13,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_fps: true,
         // asset_path: String::from("assets/african_head"),
         asset_path: String::from("assets/diablo"),
+        // shader_pipeline_name: "default",
+        // shader_pipeline_name: "phong",
+        // shader_pipeline_name: "normal_map",
+        // shader_pipeline_name: "specular",
+        shader_pipeline_name: "darboux",
     };
 
     app::run(params)?;
