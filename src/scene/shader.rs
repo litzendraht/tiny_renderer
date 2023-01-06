@@ -64,11 +64,20 @@ fn should_cull_face(vertex_positions: [Vector3<f32>; 3], camera_direction: Vecto
     }
 }
 
+/// Boilerplate for accessing vertex positions from model vertex list.
+fn get_vertex_positions(model: &Model, indices: Vector3<usize>) -> [Vector3<f32>; 3] {
+    let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
+    for i in 0..3 {
+        vertex_positions[i] = model.get_vertex_position_at_index(indices[i]);
+    }
+    return vertex_positions;
+}
+
 /// Boilerplate for moving uvs to a 2x3 matrix buffer.
 fn store_vertex_uvs(
     uvs_buffer: &mut Matrix2x3<f32>, 
     tex_coords: &Vec<(f32, f32, f32)>,
-    indices: Vector3<usize>
+    indices:    Vector3<usize>
 ) {
     for i in 0..3 {
         uvs_buffer.set_column(
@@ -84,9 +93,9 @@ fn store_vertex_uvs(
 /// Boilerplate for transforming and moving vertex information, namely screen coords and z-values into buffers.
 fn store_vertex_transformation_results(
     vertex_positions: [Vector3<f32>; 3],
-    vpmv_matrix: Matrix4<f32>,
-    t_coords_buffer: &mut Matrix2x3<i32>, 
-    z_values_buffer: &mut Vector3<f32>
+    vpmv_matrix:      Matrix4<f32>,
+    t_coords_buffer:  &mut Matrix2x3<i32>, 
+    z_values_buffer:  &mut Vector3<f32>
 ) {
     for i in 0..3 {
         let vertex_t_position = from_hom_point(
@@ -134,10 +143,7 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
-        for i in 0..3 {
-            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
-        }
+        let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
 
         // Calculating normal projection on the face.
@@ -148,7 +154,6 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
             buffer.it_mv_matrix * to_hom_vector(face_normal)
         ).normalize();
         let diff_coef = buffer.t_light_direction.dot(&t_face_normal);
-
         buffer.vertex_intensities = vector![diff_coef, diff_coef, diff_coef];
 
         store_vertex_transformation_results(
@@ -195,10 +200,7 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
-        for i in 0..3 {
-            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
-        }
+        let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
 
         // Calculating light intensities at each vertex to then interpolate them in fragment shader.
@@ -259,10 +261,7 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
-        for i in 0..3 {
-            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
-        }
+        let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
         store_vertex_transformation_results(
@@ -313,10 +312,7 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
-        for i in 0..3 {
-            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
-        }
+        let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
         store_vertex_transformation_results(
@@ -341,15 +337,16 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         let t_fragment_normal = from_hom_vector(
             buffer.it_mv_matrix * to_hom_vector(fragment_normal)
         ).normalize();
-        // Important minus here - light direction is from source to 
-        let reflected_light_direction = (
+        // Calculated reflection direction, immediately in a new camera frame.
+        let reflected_t_light_direction = (
             2.0 * (
                 t_fragment_normal * 
                 buffer.t_light_direction.dot(&t_fragment_normal)
             ) - buffer.t_light_direction
         ).normalize();
         let diff_coef = buffer.t_light_direction.dot(&t_fragment_normal);
-        let spec_coef = 0.6 * reflected_light_direction.z.max(0.0).powf(model.get_specular_value_at_uv(uv));
+        // Accesing only .z, since in the new frame camera direction is always [0.0, 0.0, -1.0].
+        let spec_coef = 0.6 * reflected_t_light_direction.z.max(0.0).powf(model.get_specular_value_at_uv(uv));
         let corrected_color = vector![
             ((diff_coef + spec_coef) * color[0] as f32).min(255.0) as u8,
             ((diff_coef + spec_coef) * color[1] as f32).min(255.0) as u8,
@@ -379,10 +376,7 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
-        for i in 0..3 {
-            vertex_positions[i] = model.get_vertex_position_at_index(pos_indices[i]);
-        }
+        let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
         // Collecting transformed vertex positions in a buffer to use in local basis calculation.
