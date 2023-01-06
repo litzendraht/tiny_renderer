@@ -61,11 +61,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let specular_map = image::open(specular_map_path)?.into_rgb8();
     println!("Dimensions of loaded specular map are: {} x {}", specular_map.width(), specular_map.height());
 
-    // let shader_pipeline_name = "default";
-    let shader_pipeline_name = "phong";
-    // let shader_pipeline_name = "true_normal";
-    // let shader_pipeline_name = "specular";
-    // let shader_pipeline_name = "darboux";
+    println!("Cooking up a scene with '{}' shader pipeline", params.shader_pipeline_name);
     let mut scene = Scene::new(
         params.width, 
         params.height, 
@@ -106,9 +102,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
         // scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
         scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());
-        // Preparing transforms, initializing shader buffer.
-        scene.prepare_render(look_from, look_at, up);
-        // Rendering the current frame.
+        // Preparing transforms, setting up shader buffer.
+        scene.set_camera(look_from, look_at, up);
         scene.render();
 
         // Getting rendered data as a data slice and feeding it into window.
