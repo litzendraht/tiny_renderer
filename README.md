@@ -23,5 +23,5 @@ Doesn't work too well for the diablo model for some reason, so here is the afric
 # Hard shadows + Phong shading
 ![image](https://user-images.githubusercontent.com/17012740/211145845-af1ac974-7168-45e1-bc2d-7445560b6dc5.png)
 
-# Ambient Occlusion
+# Ambient occlusion
 ![image](https://user-images.githubusercontent.com/17012740/211145561-d249adcf-4dc5-4b5c-867a-407039a65691.png)
