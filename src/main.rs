@@ -18,7 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // shader_pipeline_name: "normal_map",
         // shader_pipeline_name: "specular",
         // shader_pipeline_name: "darboux",
-        shader_pipeline_name: "shadow",
+        // shader_pipeline_name: "shadow",
+        shader_pipeline_name: "occlusion",
     };
 
     app::run(params)?;

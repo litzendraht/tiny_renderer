@@ -1,8 +1,10 @@
+use std::f32::consts::PI;
+
 // @TODO no culling at the momement, drawing every face, maybe worth fixing.
 use super::util::{Model, to_hom_point, from_hom_point, to_hom_vector, from_hom_vector, color_blend};
 
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matrix2x3};
+use na::{vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matrix2x3, Rotation3};
 
 /// Buffer for passing values between different stages of a pipeline and setting up frame constants
 /// like light direction and transform matrices.
@@ -176,6 +178,7 @@ impl ShaderPipeline {
             "specular"     => passes = get_specular_pipeline_passes(),
             "darboux"      => passes = get_darboux_pipeline_passes(),
             "shadow"       => passes = get_shadow_pipeline_passes(),
+            "occlusion"    => passes = get_occlusion_pipeline_passes(),
             _ => panic!("Provided pipeline name is not supported!"),
         }
 
@@ -723,7 +726,11 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
                 ]
             )
         );
-        let shadow_index = (shadow_coord.x as u32 + (shadow_coord.y as u32) * buffer.width) as usize;
+        // Very importnat to cast shadow_coord to u32 as opposed to buffer.width to f32!
+        let shadow_index = (
+            shadow_coord.x.round() as u32 + 
+            (shadow_coord.y.round() as u32) * buffer.width
+        ) as usize;
         let mut shadow_coef = 1.0;
         // +1.0 to combat z-fighting.
         if shadow_coord.z + 1.0 < buffer.shadow_buffer[shadow_index] { shadow_coef = 0.3; }
@@ -736,6 +743,159 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         return true;
     };
 
+    passes.push(ShaderPass { 
+        prepare:  Box::new(shadow_pass_prepare_1),
+        vertex:   Box::new(vertex_pass_1), 
+        fragment: Box::new(fragment_pass_1),
+    });
+    passes.push(ShaderPass { 
+        prepare:  Box::new(shadow_pass_prepare_2),
+        vertex:   Box::new(vertex_pass_2), 
+        fragment: Box::new(fragment_pass_2),
+    });
+
+    return passes;
+}
+
+/// Two pass pipeline, doing render, placing camera at the light position and then using obtained z-buffer
+/// to account for geometry occlusion.
+fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
+    let mut passes = Vec::<ShaderPass>::new();
+
+    let vertex_pass_1 = |
+        buffer:         &mut Buffer,
+        model:          &Model,
+        pos_indices:    Vector3<usize>,
+        tex_indices:    Vector3<usize>,
+        normal_indices: Vector3<usize>
+    | -> bool {
+        let vertex_positions = get_vertex_positions(model, pos_indices);
+        // No culling on this pass, since cull decisions for the real camera can be different.
+        // Also no other operations except for position transformation and uv calculation - we
+        // need only info, that will help us to calculate the shadow buffer in the fragment shader.
+        store_vertex_transformation_results(
+            vertex_positions,
+            buffer.shadow_matrix, 
+            &mut buffer.vertex_t_raster, 
+            &mut buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
+
+        // Returning true so shadow buffer is updated with z-values from all fragments.
+        return true;
+    };
+
+    let fragment_pass_1 = |
+        buffer:    &mut Buffer,
+        model:     &Model,
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
+    | -> bool {
+        // Filling shadow buffer.
+        let index = (coord.x + coord.y * buffer.width) as usize;
+        let z_value = bar_coord.dot(&buffer.vertex_z_values);
+        if z_value >= buffer.shadow_buffer[index] {
+            buffer.shadow_buffer[index] = z_value;
+        }
+        
+        // Don't need to draw anything to the final frame buffer on this pass, so just returning false. 
+        return false;
+    };
+
+    let vertex_pass_2 = |
+        buffer:         &mut Buffer,
+        model:          &Model,
+        pos_indices:    Vector3<usize>,
+        tex_indices:    Vector3<usize>,
+        normal_indices: Vector3<usize>
+    | -> bool {
+        // Phong vertex shader.
+        let vertex_positions = get_vertex_positions(model, pos_indices);
+        if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }        
+        store_vertex_transformation_results(
+            vertex_positions,
+            buffer.vpmv_matrix, 
+            &mut buffer.vertex_t_raster, 
+            &mut buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
+
+        return true;
+    };
+
+    let fragment_pass_2 = |
+        buffer:    &mut Buffer,
+        model:     &Model,
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
+    | -> bool {
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
+
+        let light_direction = from_hom_vector(
+            buffer.i_vpmv_matrix * to_hom_vector(buffer.t_light_direction)
+        );
+        // Finding position of the fragment in the global coordinates first.  
+        let fragment_world_position = from_hom_point(
+            buffer.i_vpmv_matrix * to_hom_point(
+                vector![
+                    coord.x as f32,
+                    coord.y as f32,
+                    bar_coord.dot(&buffer.vertex_z_values)
+                ]
+            )
+        );
+        let fragment_shadow_coord = from_hom_point(
+            buffer.shadow_matrix * buffer.i_vpmv_matrix * to_hom_point(
+                vector![
+                    coord.x as f32,
+                    coord.y as f32,
+                    bar_coord.dot(&buffer.vertex_z_values)
+                ]
+            )
+        );
+        let fragment_shadow_index = (
+            fragment_shadow_coord.x.round() as u32 + 
+            (fragment_shadow_coord.y.round() as u32) * buffer.width
+        ) as usize;
+        let fragment_shadow_value = buffer.shadow_buffer[fragment_shadow_index];
+
+        // Sampling 16 points around the fragment uniformly in the plane perpendicular to the light direction. 
+        // Each sample is transformed to shadow buffer coordinates in order to check occlusion.
+        let threshold = 5.0; // Occluding the point only if it is this deep relative to the neighbours.
+        let mut occlusion_coef = 1.0;
+        let number_of_samples = 16;
+        let step_size = 0.02; // Distance of the step from the fragment.
+        let angle_coef = (2.0 * std::f32::consts::PI) / (number_of_samples as f32);
+        let rot = Rotation3::rotation_between(
+            &vector![0.0, 0.0, 1.0],
+            &light_direction
+        ).unwrap();
+        for i in 0..number_of_samples {
+            let global_step_dir = vector![(angle_coef * i as f32).sin(), 0.0, (angle_coef * i as f32).cos()];
+            let step_dir = rot * global_step_dir;
+            let sample = fragment_world_position + step_dir * step_size;
+            let shadow_coord = from_hom_point(
+                buffer.shadow_matrix * to_hom_point(sample)
+            );
+            let shadow_index = (
+                shadow_coord.x.round() as u32 + 
+                (shadow_coord.y.round() as u32) * buffer.width
+            ) as usize;
+            if buffer.shadow_buffer[shadow_index] - threshold > fragment_shadow_value {
+                let mut occlusion_strength = (buffer.shadow_buffer[shadow_index] - fragment_shadow_value) / 20.0;
+                occlusion_strength = occlusion_strength.min(1.0);
+                occlusion_coef -= (1.0 / (number_of_samples as f32)) * occlusion_strength;
+            }
+        }        
+
+        // occlusion_coef = occlusion_coef.powf(0.5);
+        buffer.fragment_color = color_blend(vector![255, 255, 255], vector![0, 0, 0], occlusion_coef);
+
+        return true;
+    };
+
+    // Preparation for the occlusion passes is the same as for shadow passes, wince we need the same
+    // shadow buffer and a way to transform to shadow buffer coordinates.
     passes.push(ShaderPass { 
         prepare:  Box::new(shadow_pass_prepare_1),
         vertex:   Box::new(vertex_pass_1), 
