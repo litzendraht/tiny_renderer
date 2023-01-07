@@ -94,21 +94,24 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         scene.clear();        
 
         // Setting up camera position and direction.
-        let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
-        // let look_from = vector![0.0, 0.0, 1.0];
+        // let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
+        let look_from = vector![0.0, 0.0, 1.0];
         let look_at = vector![0.0, 0.0, 0.0];
         let up = vector![0.0, 1.0, 0.0];
         // Setting up the light. Direction is FROM surface TO source, so negative of true direction.
         // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
+        // Easier to think of this as light source position on a unit sphere.
         // scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
         scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());
+        // scene.set_light_direction(vector![-0.5, -0.5, 0.5].normalize());
         // Preparing transforms, setting up shader buffer.
         scene.set_camera(look_from, look_at, up);
         scene.render();
 
         // Getting rendered data as a data slice and feeding it into window.
-        let data = scene.get_render_data();
-        // let data = scene.get_depth_data();
+        let data = scene.get_frame_buffer();
+        // let data = scene.get_z_buffer();
+        // let data = scene.get_shaqdow_buffer();
         let image_view = ImageView::new(ImageInfo::rgb8(params.width, params.height), data.as_raw());
         window.set_image("image", image_view)?;
 

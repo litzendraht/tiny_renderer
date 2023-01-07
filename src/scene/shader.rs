@@ -2,7 +2,7 @@
 use super::util::{Model, to_hom_point, from_hom_point, to_hom_vector, from_hom_vector, color_blend};
 
 use nalgebra as na;
-use na::{vector, Vector3, matrix, Matrix3, Matrix4, Matrix2x3};
+use na::{vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matrix2x3};
 
 /// Buffer for passing values between different stages of a pipeline and setting up frame constants
 /// like light direction and transform matrices.
@@ -10,6 +10,8 @@ use na::{vector, Vector3, matrix, Matrix3, Matrix4, Matrix2x3};
 // worth thinking about how to get a more fine-grained buffer structure for each shader.
 #[derive(Default)]
 pub struct Buffer {
+    pub width:             u32,            // Width of the frame buffer.
+    pub height:            u32,            // Height of the frame buffer.
     // Pointers to some fat buffers like z-buffer and shadow buffer.    
     pub z_buffer:          Vec<f32>,
     pub shadow_buffer:     Vec<f32>,
@@ -17,14 +19,16 @@ pub struct Buffer {
     pub camera_direction:  Vector3<f32>,
     pub t_light_direction: Vector3<f32>,   // Light direction with model and view transformations applied.
     pub vpmv_matrix:       Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
+    pub i_vpmv_matrix:     Matrix4<f32>,   // Needed for the shadow shader.
     pub mv_matrix:         Matrix4<f32>,   // Applied to light direction.
     pub it_mv_matrix:      Matrix4<f32>,   // Applied to model normals.
+    pub shadow_matrix:     Matrix4<f32>,   // Transform from frame-buffer to shadow buffer coords.
     // Local buffer for passing values between vertex and fragment parts of the pipeline.    
     vertex_intensities:    Vector3<f32>,   // Light intensity in each vertex of a polygon.
     vertex_t_positions:    Matrix3<f32>,   // Transformed vertex positions as columns.
     vertex_t_normals:      Matrix3<f32>,   // Transformed vertex normals at each vertex as columns.
     vertex_uvs:            Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex as columns.
-    pub vertex_t_coords:   Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
+    pub vertex_t_raster:   Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
     pub vertex_z_values:   Vector3<f32>,   // Value used for comparison with existing z-buffer values.
     // Access to color after application of fragment shader.
     pub fragment_color:    Vector3<u8> 
@@ -34,6 +38,8 @@ impl Buffer {
     fn new(width: u32, height: u32) -> Self {
         let frame_buffer_size = (width * height) as usize;
         return Self {
+            width,
+            height,
             z_buffer:      vec![0.0; frame_buffer_size],
             shadow_buffer: vec![0.0; frame_buffer_size],
             ..Default::default()
@@ -66,8 +72,8 @@ type VertexShader = dyn Fn(
 type FragmentShader = dyn Fn(
     &mut Buffer,    // Buffer
     &Model,         // Model info.
-    Vector3<f32>,   // Barycentric coordinates.
-    usize           // Index of the fragment in the framebuffer.
+    Vector2<u32>,    // Coordinates of the fragment in the frame buffer.
+    Vector3<f32>   // Barycentric coordinates.
 ) -> bool;
 
 /// Representation of one pass in the shader pipeline storing closures, representing a 3 steps - 
@@ -145,16 +151,17 @@ fn store_vertex_transformation_results(
 }
 
 /// Boilerplate for checking z-value of the fragment against the z-buffer.
-/// Returns false if there is no need to update the framebuffer.
-fn process_z_value(buffer: &mut Buffer, bar_coord: Vector3<f32>, index: usize) -> bool {
+/// Returns false if there is no need to update the frame-buffer.
+fn process_z_value(buffer: &mut Buffer, bar_coord: Vector3<f32>, coord: Vector2<u32>) -> bool {
     // Checking fragment z-value in the pipeline buffer and comparing it to the value in the 
     // buffer, on failure returning false, signifying that no further fragment processing
     // should be done
-    let z_to_screen = bar_coord.dot(&buffer.vertex_z_values); 
-    if z_to_screen <= buffer.z_buffer[index] {
+    let index = coord.x as usize + (coord.y * buffer.width) as usize;
+    let z_value = bar_coord.dot(&buffer.vertex_z_values); 
+    if z_value <= buffer.z_buffer[index] {
         return false;
     }
-    buffer.z_buffer[index] = z_to_screen;
+    buffer.z_buffer[index] = z_value;
     return true;
 }
 
@@ -180,121 +187,89 @@ impl ShaderPipeline {
 }
 
 /// Standard setup which prepares transforms to the basis relative to the camera.
-fn get_default_prepare() -> Box<Prepare> {
-    let prepare = |
-        buffer:          &mut Buffer,
-        width:           u32,
-        height:          u32,
-        light_direction: Vector3<f32>,
-        look_from:       Vector3<f32>,
-        look_at:         Vector3<f32>,
-        up:              Vector3<f32>        
-    | {
-        // New coordinate system a, b, c around camera position.
-        let new_z = (look_from - look_at).normalize();
-        let new_y = (up - new_z.dot(&up) * new_z).normalize();
-        let new_x = new_y.cross(&new_z).normalize();        
-        let model_matrix = matrix![new_x.x, new_x.y, new_x.z, 0.0;
-                                   new_y.x, new_y.y, new_y.z, 0.0;
-                                   new_z.x, new_z.y, new_z.z, 0.0;
-                                   0.0,     0.0,     0.0,     1.0];
-        let view_matrix = matrix![1.0, 0.0, 0.0, -look_from.x;
-                                  0.0, 1.0, 0.0, -look_from.y;
-                                  0.0, 0.0, 1.0, -look_from.z;
-                                  0.0, 0.0, 0.0, 1.0];
-        // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
-        // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 works ok.
-        let coef = -1.0 / 5.0;
-        let projection_matrix = matrix![1.0, 0.0, 0.0,  0.0;
-                                        0.0, 1.0, 0.0,  0.0;
-                                        0.0, 0.0, 1.0,  0.0;
-                                        0.0, 0.0, coef, 1.0];
-        // Viewport matrix depends only on constants.
-        // Setting z-buffer resolution to 255.
-        // Redef for convenience.
-        let w = (width - 1) as f32;
-        let h = (height - 1) as f32;
-        let d = 255.;
-        let viewport_matrix = matrix![w / 2.0, 0.0,     0.0,     w / 2.0;
-                                      0.0,     h / 2.0, 0.0,     h / 2.0;
-                                      0.0,     0.0,     d / 2.0, d / 2.0;
-                                      0.0,     0.0,     0.0,     1.0];
+fn default_prepare(
+    buffer:          &mut Buffer,
+    width:           u32,
+    height:          u32,
+    light_direction: Vector3<f32>,
+    look_from:       Vector3<f32>,
+    look_at:         Vector3<f32>,
+    up:              Vector3<f32>
+) {
+    // New coordinate system a, b, c around camera position.
+    let new_z = (look_from - look_at).normalize();
+    let new_y = (up - new_z.dot(&up) * new_z).normalize();
+    let new_x = new_y.cross(&new_z).normalize();        
+    let model_matrix = matrix![new_x.x, new_x.y, new_x.z, 0.0;
+                               new_y.x, new_y.y, new_y.z, 0.0;
+                               new_z.x, new_z.y, new_z.z, 0.0;
+                               0.0,     0.0,     0.0,     1.0];
+    let view_matrix = matrix![1.0, 0.0, 0.0, -look_from.x;
+                              0.0, 1.0, 0.0, -look_from.y;
+                              0.0, 0.0, 1.0, -look_from.z;
+                              0.0, 0.0, 0.0, 1.0];
+    // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
+    // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 works ok.
+    let coef = -1.0 / 5.0;
+    let projection_matrix = matrix![1.0, 0.0, 0.0,  0.0;
+                                    0.0, 1.0, 0.0,  0.0;
+                                    0.0, 0.0, 1.0,  0.0;
+                                    0.0, 0.0, coef, 1.0];
+    // Viewport matrix depends only on constants.
+    // Setting z-buffer resolution to 255.
+    // Redef for convenience.
+    let w = (width - 1) as f32;
+    let h = (height - 1) as f32;
+    let d = 255.;
+    let viewport_matrix = matrix![w / 2.0, 0.0,     0.0,     w / 2.0;
+                                  0.0,     h / 2.0, 0.0,     h / 2.0;
+                                  0.0,     0.0,     d / 2.0, d / 2.0;
+                                  0.0,     0.0,     0.0,     1.0];
 
-        // Preparing shader pipeline for the render pass.
-        buffer.vpmv_matrix = viewport_matrix *
-                             projection_matrix * 
-                             model_matrix * 
-                             view_matrix;
-        // Not interested in projection and rasterization, when transformaing light direction and normals.
-        buffer.mv_matrix = model_matrix * view_matrix;
-        buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();
-        buffer.camera_direction = new_z;   
-        buffer.t_light_direction = from_hom_vector(
-            buffer.mv_matrix * to_hom_vector(light_direction)
-        ).normalize();
-    };
-
-    return Box::new(prepare);
+    // Preparing shader pipeline for the render pass.
+    buffer.vpmv_matrix = viewport_matrix *
+                         projection_matrix * 
+                         model_matrix * 
+                         view_matrix;
+    // Not interested in projection and rasterization, when transformaing light direction and normals.
+    buffer.mv_matrix = model_matrix * view_matrix;
+    buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();
+    buffer.camera_direction = new_z;   
+    buffer.t_light_direction = from_hom_vector(
+        buffer.mv_matrix * to_hom_vector(light_direction)
+    ).normalize();
 }
 
 /// Pipeline preparation for the pass, where we want to get depth information as if our camera was placed at
 /// the light source.
-fn get_shadow_pass_prepare() -> Box<Prepare> {
-    let prepare = |
-        buffer:          &mut Buffer,
-        width:           u32,
-        height:          u32,
-        light_direction: Vector3<f32>,
-        look_from:       Vector3<f32>,
-        look_at:         Vector3<f32>,
-        up:              Vector3<f32>        
-    | {
-        // Light direction is inverted so we don't have to place annoying minuses in shaders, so we need
-        // to invert it back, if it is to serve as a camera for the pass.
-        let new_z = -light_direction.normalize();
-        let new_y = (up - new_z.dot(&up) * new_z).normalize();
-        let new_x = new_y.cross(&new_z).normalize();        
-        let model_matrix = matrix![new_x.x, new_x.y, new_x.z, 0.0;
-                                   new_y.x, new_y.y, new_y.z, 0.0;
-                                   new_z.x, new_z.y, new_z.z, 0.0;
-                                   0.0,     0.0,     0.0,     1.0];
-        let view_matrix = matrix![1.0, 0.0, 0.0, light_direction.x;
-                                  0.0, 1.0, 0.0, light_direction.y;
-                                  0.0, 0.0, 1.0, light_direction.z;
-                                  0.0, 0.0, 0.0, 1.0];
-        // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
-        // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 works ok.
-        let coef = -1.0 / 5.0;
-        let projection_matrix = matrix![1.0, 0.0, 0.0,  0.0;
-                                        0.0, 1.0, 0.0,  0.0;
-                                        0.0, 0.0, 1.0,  0.0;
-                                        0.0, 0.0, coef, 1.0];
-        // Viewport matrix depends only on constants.
-        // Setting z-buffer resolution to 255.
-        // Redef for convenience.
-        let w = (width - 1) as f32;
-        let h = (height - 1) as f32;
-        let d = 255.;
-        let viewport_matrix = matrix![w / 2.0, 0.0,     0.0,     w / 2.0;
-                                      0.0,     h / 2.0, 0.0,     h / 2.0;
-                                      0.0,     0.0,     d / 2.0, d / 2.0;
-                                      0.0,     0.0,     0.0,     1.0];
+fn shadow_pass_prepare_1(
+    buffer:          &mut Buffer,
+    width:           u32,
+    height:          u32,
+    light_direction: Vector3<f32>,
+    look_from:       Vector3<f32>,
+    look_at:         Vector3<f32>,
+    up:              Vector3<f32>        
+) {
+    default_prepare(buffer, width, height, light_direction, light_direction, look_at, up);
+    // After default application with changed camera position storing the resulting vpmv transform in a
+    // separate matrix buffer for future use.
+    buffer.shadow_matrix = buffer.vpmv_matrix;
+}
 
-        // Preparing shader pipeline for the render pass.
-        buffer.vpmv_matrix = viewport_matrix *
-                             projection_matrix * 
-                             model_matrix * 
-                             view_matrix;
-        // Not interested in projection and rasterization, when transformaing light direction and normals.
-        buffer.mv_matrix = model_matrix * view_matrix;
-        buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();
-        buffer.camera_direction = new_z;   
-        buffer.t_light_direction = from_hom_vector(
-            buffer.mv_matrix * to_hom_vector(light_direction)
-        ).normalize();
-    };
-
-    return Box::new(prepare);
+/// Pipeline preparation for the pass, where we want to get depth information as if our camera was placed at
+/// the light source.
+fn shadow_pass_prepare_2(
+    buffer:          &mut Buffer,
+    width:           u32,
+    height:          u32,
+    light_direction: Vector3<f32>,
+    look_from:       Vector3<f32>,
+    look_at:         Vector3<f32>,
+    up:              Vector3<f32>        
+) {
+    default_prepare(buffer, width, height, light_direction, look_from, look_at, up);
+    buffer.i_vpmv_matrix = buffer.vpmv_matrix.try_inverse().unwrap();
 }
 
 /// Calculating diffuse coefficient based on the face normal and light direction.
@@ -324,7 +299,7 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_transformation_results(
             vertex_positions,
             buffer.vpmv_matrix, 
-            &mut buffer.vertex_t_coords, 
+            &mut buffer.vertex_t_raster, 
             &mut buffer.vertex_z_values
         );
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
@@ -335,10 +310,10 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
+        coord:     Vector2<u32>,
         bar_coord: Vector3<f32>,
-        index:     usize
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
         let diff_coef = buffer.vertex_intensities[0];
@@ -348,7 +323,7 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
     };
 
     passes.push(ShaderPass {
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(default_prepare),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
@@ -389,7 +364,7 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_transformation_results(
             vertex_positions,
             buffer.vpmv_matrix, 
-            &mut buffer.vertex_t_coords, 
+            &mut buffer.vertex_t_raster, 
             &mut buffer.vertex_z_values
         );
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
@@ -400,10 +375,10 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
+        coord:     Vector2<u32>,
         bar_coord: Vector3<f32>,
-        index:     usize
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
         let diff_coef = bar_coord.dot(&buffer.vertex_intensities);
@@ -413,7 +388,7 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
     };
 
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(default_prepare),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
@@ -438,7 +413,7 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_transformation_results(
             vertex_positions,
             buffer.vpmv_matrix, 
-            &mut buffer.vertex_t_coords, 
+            &mut buffer.vertex_t_raster, 
             &mut buffer.vertex_z_values
         );
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
@@ -449,10 +424,10 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
-        bar_coord: Vector3<f32>,
-        index:     usize
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
@@ -466,7 +441,7 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
     };
 
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(default_prepare),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
@@ -492,7 +467,7 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_transformation_results(
             vertex_positions,
             buffer.vpmv_matrix, 
-            &mut buffer.vertex_t_coords, 
+            &mut buffer.vertex_t_raster, 
             &mut buffer.vertex_z_values
         );
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
@@ -503,10 +478,10 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
-        bar_coord: Vector3<f32>,
-        index:     usize
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
@@ -534,7 +509,7 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
     };
 
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(default_prepare),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
@@ -581,7 +556,7 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_transformation_results(
             vertex_positions,
             buffer.vpmv_matrix, 
-            &mut buffer.vertex_t_coords, 
+            &mut buffer.vertex_t_raster, 
             &mut buffer.vertex_z_values
         );
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
@@ -592,10 +567,10 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
-        bar_coord: Vector3<f32>,
-        index:     usize
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal_tangent = model.get_normal_tangent_at_uv(uv);
@@ -638,7 +613,7 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
     };
 
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(default_prepare),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
@@ -658,15 +633,36 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        return false;
+        let vertex_positions = get_vertex_positions(model, pos_indices);
+        // No culling on this pass, since cull decisions for the real camera can be different.
+        // Also no other operations except for position transformation and uv calculation - we
+        // need only info, that will help us to calculate the shadow buffer in the fragment shader.
+        store_vertex_transformation_results(
+            vertex_positions,
+            buffer.shadow_matrix, 
+            &mut buffer.vertex_t_raster, 
+            &mut buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
+
+        // Returning true so shadow buffer is updated with z-values from all fragments.
+        return true;
     };
 
     let fragment_pass_1 = |
         buffer:    &mut Buffer,
         model:     &Model,
-        bar_coord: Vector3<f32>,
-        index:     usize
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
     | -> bool {
+        // Filling shadow buffer.
+        let index = (coord.x + coord.y * buffer.width) as usize;
+        let z_value = bar_coord.dot(&buffer.vertex_z_values);
+        if z_value >= buffer.shadow_buffer[index] {
+            buffer.shadow_buffer[index] = z_value;
+        }
+        
+        // Don't need to draw anything to the final frame buffer on this pass, so just returning false. 
         return false;
     };
 
@@ -677,26 +673,76 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
     | -> bool {
-        return false;
+        // Phong vertex shader.
+        let vertex_positions = get_vertex_positions(model, pos_indices);
+        if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
+
+        // Calculating light intensities at each vertex to then interpolate them in fragment shader.
+        for i in 0..3 {
+            let vertex_normal = vector![
+                model.obj.normals[normal_indices[i]].0,
+                model.obj.normals[normal_indices[i]].1,
+                model.obj.normals[normal_indices[i]].2
+            ];
+            let vertex_t_normal = from_hom_vector(
+                buffer.it_mv_matrix * to_hom_vector(vertex_normal)
+            ).normalize();
+            buffer.vertex_intensities[i] = buffer.t_light_direction.dot(
+                &vertex_t_normal
+            );
+        }
+        
+        store_vertex_transformation_results(
+            vertex_positions,
+            buffer.vpmv_matrix, 
+            &mut buffer.vertex_t_raster, 
+            &mut buffer.vertex_z_values
+        );
+        store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
+
+        return true;
     };
 
     let fragment_pass_2 = |
         buffer:    &mut Buffer,
         model:     &Model,
-        bar_coord: Vector3<f32>,
-        index:     usize
+        coord:     Vector2<u32>,
+        bar_coord: Vector3<f32>
     | -> bool {
-        if !process_z_value(buffer, bar_coord, index) { return false; }
-        return false;
+        if !process_z_value(buffer, bar_coord, coord) { return false; }
+
+        // Accounting for the shadow - finding the current fragment in the shadow buffer and looking at its
+        // z-value there - if it is larger than the z-value, that we got from current transform, it means, 
+        // that our fragment is in the shadow, so we need to dim the color.        
+        let shadow_coord = from_hom_point(
+            buffer.shadow_matrix * buffer.i_vpmv_matrix * to_hom_point(
+                vector![
+                    coord.x as f32,
+                    coord.y as f32,
+                    bar_coord.dot(&buffer.vertex_z_values)
+                ]
+            )
+        );
+        let shadow_index = (shadow_coord.x as u32 + (shadow_coord.y as u32) * buffer.width) as usize;
+        let mut shadow_coef = 1.0;
+        // +1.0 to combat z-fighting.
+        if shadow_coord.z + 1.0 < buffer.shadow_buffer[shadow_index] { shadow_coef = 0.3; }
+
+        let uv = buffer.vertex_uvs * bar_coord;
+        let color = model.get_color_at_uv(uv);
+        let diff_coef = bar_coord.dot(&buffer.vertex_intensities);
+        buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef * shadow_coef);
+
+        return true;
     };
 
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(shadow_pass_prepare_1),
         vertex:   Box::new(vertex_pass_1), 
         fragment: Box::new(fragment_pass_1),
     });
     passes.push(ShaderPass { 
-        prepare:  get_default_prepare(),
+        prepare:  Box::new(shadow_pass_prepare_2),
         vertex:   Box::new(vertex_pass_2), 
         fragment: Box::new(fragment_pass_2),
     });

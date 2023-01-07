@@ -29,7 +29,7 @@ pub struct Scene
     // u8 vesrion of z-buffer directly passed to image_show.
     depth_data:      Vec<u8>,
     // Storing flat array.
-    render_data:     Vec<u8>,
+    frame_buffer:    Vec<u8>,
     
 }
 
@@ -60,8 +60,8 @@ impl Scene
         let look_from       = vector![0.0, 0.0, 1.0];
         let look_at         = vector![0.0, 0.0, 0.0];
         let up              = vector![0.0, 1.0, 0.0];
-        let depth_data:  Vec<u8>  = vec![0; 3 * frame_buffer_size];
-        let render_data: Vec<u8>  = vec![0; 3 * frame_buffer_size];
+        let depth_data:   Vec<u8> = vec![0; 3 * frame_buffer_size];
+        let frame_buffer: Vec<u8> = vec![0; 3 * frame_buffer_size];
         return Scene {
             width,
             height,
@@ -72,15 +72,15 @@ impl Scene
             look_at,
             up,
             depth_data,
-            render_data,
+            frame_buffer,
         }
     }
     
     /// Get rendered scene as a slice of color values of size 3 * (number of pixels).
     /// Flips the image, so (0, 0) is the lower left corner.
-    pub fn get_render_data(&self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    pub fn get_frame_buffer(&self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
-            self.width, self.height, self.render_data.clone()
+            self.width, self.height, self.frame_buffer.clone()
         ).unwrap();
         image::imageops::flip_vertical_in_place(&mut buffer);
         return buffer;
@@ -88,12 +88,26 @@ impl Scene
 
     /// Get image, representing z-buffer values.
     /// Lazy in a sense, that color data for the image is calculated only if this call is made.
-    // @TODO figure out, why it doesn't want to work.
-    pub fn get_depth_data(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    pub fn get_z_buffer(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         for i in 0..self.shader_pipeline.buffer.z_buffer.len() {
             self.depth_data[3 * i + 0] = self.shader_pipeline.buffer.z_buffer[i] as u8;
             self.depth_data[3 * i + 1] = self.shader_pipeline.buffer.z_buffer[i] as u8;
             self.depth_data[3 * i + 2] = self.shader_pipeline.buffer.z_buffer[i] as u8;
+        }
+        let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
+            self.width, self.height, self.depth_data.clone()
+        ).unwrap();
+        image::imageops::flip_vertical_in_place(&mut buffer);
+        return buffer;
+    }
+
+    /// Get image, representing shadow-buffer values.
+    /// Lazy in a sense, that color data for the image is calculated only if this call is made.
+    pub fn get_shadow_buffer(&mut self) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+        for i in 0..self.shader_pipeline.buffer.shadow_buffer.len() {
+            self.depth_data[3 * i + 0] = self.shader_pipeline.buffer.shadow_buffer[i] as u8;
+            self.depth_data[3 * i + 1] = self.shader_pipeline.buffer.shadow_buffer[i] as u8;
+            self.depth_data[3 * i + 2] = self.shader_pipeline.buffer.shadow_buffer[i] as u8;
         }
         let mut buffer: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_vec(
             self.width, self.height, self.depth_data.clone()
@@ -107,9 +121,10 @@ impl Scene
         let frame_buffer_size = (self.width * self.height) as usize;
         for i in 0..frame_buffer_size {
             self.shader_pipeline.buffer.z_buffer[i] = f32::MIN;
-            self.render_data[3 * i + 0] = 0;
-            self.render_data[3 * i + 1] = 0;
-            self.render_data[3 * i + 2] = 0;
+            self.shader_pipeline.buffer.shadow_buffer[i] = f32::MIN;
+            self.frame_buffer[3 * i + 0] = 0;
+            self.frame_buffer[3 * i + 1] = 0;
+            self.frame_buffer[3 * i + 2] = 0;
         }
     }
 
@@ -206,8 +221,8 @@ impl Scene
                     continue;
                 }
 
-                let vertex_t_coords = self.shader_pipeline.buffer.vertex_t_coords;
-                let bbox = get_triangle_bounding_box(vertex_t_coords);
+                let vertex_t_raster = self.shader_pipeline.buffer.vertex_t_raster;
+                let bbox = get_triangle_bounding_box(vertex_t_raster);
 
                 // Accounting for possibility that bbox can reach outside of the screen.
                 for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
@@ -215,7 +230,7 @@ impl Scene
                         let pixel_index = (i + j * self.width as i32) as usize;
                         let bar_coord = to_barycentric_coord(
                             vector![i, j], 
-                            vertex_t_coords
+                            vertex_t_raster
                         );
 
                         // If any of the coordinates are negative, point is not in the triangle, so skipping it.
@@ -224,19 +239,19 @@ impl Scene
                         }                        
 
                         // If fragment shader returns true, getting color from the pipeline and coloring the
-                        // pixel.
+                        // pixel, else skipping the pixel.
                         if !(pass.fragment)(
                             &mut self.shader_pipeline.buffer, 
                             &self.model,
-                            bar_coord, 
-                            pixel_index
+                            vector![i as u32, j as u32],
+                            bar_coord
                         ) {
                             continue;
                         }
                         let fragment_color = self.shader_pipeline.buffer.fragment_color;
-                        self.render_data[3 * pixel_index + 0] = fragment_color.x;
-                        self.render_data[3 * pixel_index + 1] = fragment_color.y;
-                        self.render_data[3 * pixel_index + 2] = fragment_color.z;
+                        self.frame_buffer[3 * pixel_index + 0] = fragment_color.x;
+                        self.frame_buffer[3 * pixel_index + 1] = fragment_color.y;
+                        self.frame_buffer[3 * pixel_index + 2] = fragment_color.z;
                     }
                 }
             }
