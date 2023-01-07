@@ -1,7 +1,6 @@
-use std::time;
+use std::{time, collections::HashMap};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
 
 use show_image::{WindowOptions, ImageView, ImageInfo, event, create_window};
 use obj::raw::parse_obj;
@@ -10,30 +9,85 @@ use na::vector;
 
 use crate::scene::Scene;
 
-// @TODO redo asset_path to be an actual Path object somehow
+const CAMERA_SPEED:       f32 = 3.0;
+const LIGHT_SOURCE_SPEED: f32 = 3.0;
+
+#[derive(PartialEq, Eq, Hash)]
+enum Action {
+    CameraLeft,
+    CameraRight,
+    LightLeft,
+    LightRight,
+    ExitApp,
+}
+
 pub struct Params {
     pub width:                u32,
     pub height:               u32,
     pub print_fps:            bool,
     pub asset_path:           String,
-    pub shader_pipeline_name: &'static str,
+    pub shader_pipeline_name: String,
 }
 
-/// Helper, defining exit event to be an Escape key press.
-fn is_exit_event(window_event: event::WindowEvent) -> bool {
-    if let event::WindowEvent::KeyboardInput(event) = window_event {
-        // println!("{:#?}", event);
-        if event.input.key_code == Some(event::VirtualKeyCode::Escape) && event.input.state.is_released() {
-            return true;
+struct FrameActionBuffer {
+    // 0 - CameraLeft
+    // 1 - CameraRight
+    // 2 - LightLeft
+    // 3 - LightRight
+    // 4 - Exit
+    pub actions: HashMap<Action, bool>,
+}
+
+impl FrameActionBuffer {
+    fn new() -> Self {
+        return Self {
+            actions: HashMap::from([
+                (Action::CameraLeft,  false),
+                (Action::CameraRight, false),
+                (Action::LightLeft,   false),
+                (Action::LightRight,  false),
+                (Action::ExitApp,     false),
+            ]),
         }
     }
 
-    return false;
+    fn reset(&mut self) {
+        for (_, value) in self.actions.iter_mut() {
+            *value = false;
+        }
+    }
+
+    fn process_window_event(&mut self, window_event: event::WindowEvent) {
+        if let event::WindowEvent::KeyboardInput(event) = window_event {
+            match (
+                event.input.key_code, 
+                event.input.state.is_pressed(), 
+                event.input.state.is_released()
+            ) {
+                (Some(event::VirtualKeyCode::A),      true, _   ) => {
+                    *self.actions.entry(Action::CameraLeft).or_insert(true) = true; 
+                },
+                (Some(event::VirtualKeyCode::D),      true, _   ) => {
+                    *self.actions.entry(Action::CameraRight).or_insert(true) = true; 
+                },
+                (Some(event::VirtualKeyCode::Q),      true, _   ) => {
+                    *self.actions.entry(Action::LightLeft).or_insert(true) = true; 
+                },
+                (Some(event::VirtualKeyCode::E),      true, _   ) => {
+                    *self.actions.entry(Action::LightRight).or_insert(true) = true; 
+                },
+                (Some(event::VirtualKeyCode::Escape), _,    true) => {
+                    *self.actions.entry(Action::ExitApp).or_insert(true) = true; 
+                },
+                _ => ()
+            }
+        }
+    }
 }
 
 /// Actualy launches the window, showing images.
 /// Takes struct, defining execution params.
-pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{    
+pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {   
     let obj_path = params.asset_path.clone() + "/model.obj";
     let texture_path = params.asset_path.clone() + "/texture.tga";
     let normal_map_path = params.asset_path.clone() + "/normal_map.tga";
@@ -80,12 +134,29 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
     let window = create_window("output", window_options)?;
     let event_channel = window.event_channel()?;
 
+    // Buffer for tracking actionable window events.
+    let mut frame_action_buffer = FrameActionBuffer::new();
+    // Variables for convenience.
+    let mut camera_angle: f32 = 0.0;
+    let mut light_direction_angle: f32 = 0.0;
+    // Initial camera and light setup.
+    let mut look_from = vector![camera_angle.sin(), 0.0, camera_angle.cos()];
+    let look_at       = vector![0.0, 0.0, 0.0];
+    let up            = vector![0.0, 1.0, 0.0];
+    // Direction is FROM surface TO source, so negative of true direction.
+    // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
+    // Easier to think of this as light source position on a unit sphere.
+    let mut light_direction = vector![light_direction_angle.sin(), 0.0, light_direction_angle.cos()];
     // Stats.
     let mut exit = false;
     let time_begin = time::Instant::now();
     let mut frame_counter_time_begin = time::Instant::now();
     let mut frame_counter: u32 = 0;
+    let mut frame_begin_time;
+    let mut frame_time = 0.0;
     while !exit {
+        frame_begin_time = time::Instant::now();
+
         let passed_time = time::Instant::now()
         .duration_since(time_begin)
         .as_secs_f32();
@@ -93,38 +164,41 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
         // Clearing z-buffer and resetting rendered data to (0, 0, 0).
         scene.clear();        
 
-        // Setting up camera position and direction.
-        // let look_from = vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()];
-        let look_from = vector![0.0, 0.0, 1.0];
-        let look_at = vector![0.0, 0.0, 0.0];
-        let up = vector![0.0, 1.0, 0.0];
-        // Setting up the light. Direction is FROM surface TO source, so negative of true direction.
-        // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
-        // Easier to think of this as light source position on a unit sphere.
-        scene.set_light_direction(vector![0.0, 0.0, 1.0].normalize());
-        // scene.set_light_direction(vector![1.0 * passed_time.sin(), 0.0, 1.0 * passed_time.cos()].normalize());
-        // scene.set_light_direction(vector![-0.5, -0.5, 0.5].normalize());
-        // Preparing transforms, setting up shader buffer.
+        // Movement speed is proportional to previous frame dt for a smoother experience.
+        if *frame_action_buffer.actions.get(&Action::CameraRight).unwrap() {
+            camera_angle += CAMERA_SPEED * frame_time;
+        }
+        if *frame_action_buffer.actions.get(&Action::CameraLeft).unwrap() {
+            camera_angle -= CAMERA_SPEED * frame_time;
+        }
+        if *frame_action_buffer.actions.get(&Action::LightRight).unwrap() {
+            light_direction_angle += LIGHT_SOURCE_SPEED * frame_time;
+        }
+        if *frame_action_buffer.actions.get(&Action::LightLeft).unwrap() {
+            light_direction_angle -= LIGHT_SOURCE_SPEED * frame_time;
+        }
+        look_from = vector![camera_angle.sin(), 0.0, camera_angle.cos()];
+        light_direction = vector![light_direction_angle.sin(), 0.0, light_direction_angle.cos()];
+        scene.set_light_direction(light_direction);
         scene.set_camera(look_from, look_at, up);
         scene.render();
 
         // Getting rendered data as a data slice and feeding it into window.
         let data = scene.get_frame_buffer();
         // let data = scene.get_z_buffer();
-        // let data = scene.get_shaqdow_buffer();
+        // let data = scene.get_shadow_buffer();
         let image_view = ImageView::new(ImageInfo::rgb8(params.width, params.height), data.as_raw());
         window.set_image("image", image_view)?;
 
-        // Unloading all the garbage from event channel, that has piled up, looking for exit event.
-        let exit_poll_result = event_channel.try_iter()
-        .map(|window_event| is_exit_event(window_event))
-        .reduce(|was_exit_event, is_exit_event| was_exit_event || is_exit_event);
-
-        // If any event is Escape key press, then exiting.
-        exit = match exit_poll_result {
-            Some(value) => value,
-            None => false,
-        };
+        // Unloading all the garbage from event channel, that has piled up, looking for actionable events.
+        frame_action_buffer.reset();
+        for window_event in event_channel.try_iter() {
+            frame_action_buffer.process_window_event(window_event);
+        }
+        // If found Exit action, leaving the app in the beginning of the next frame.
+        if *frame_action_buffer.actions.get(&Action::ExitApp).unwrap() {
+            exit = true;
+        }
         
         if params.print_fps {
             // Counting frames to printout stats every seconds.
@@ -137,6 +211,10 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>>{
                 frame_counter = 0;
             }
         }
+
+        frame_time = time::Instant::now()
+        .duration_since(frame_begin_time)
+        .as_secs_f32();
     }
 
     return Ok(());

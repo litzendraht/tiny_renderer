@@ -21,12 +21,12 @@ pub struct Scene
     model:           Model,
     // Pipeline, specifying vertex and fragment shaders
     shader_pipeline: ShaderPipeline,
-    // Frame settings.
+    // Lighting and camera settings.
     light_direction: Vector3<f32>,
     look_from:       Vector3<f32>,
     look_at:         Vector3<f32>,
     up:              Vector3<f32>,
-    // u8 vesrion of z-buffer directly passed to image_show.
+    // u8 version of z-buffer directly passed to image_show.
     depth_data:      Vec<u8>,
     // Storing flat array.
     frame_buffer:    Vec<u8>,
@@ -45,7 +45,7 @@ impl Scene
         normal_map:           RgbImage,
         normal_map_tangent:   RgbImage,
         specular_map:         RgbImage,
-        shader_pipeline_name: &str
+        shader_pipeline_name: String
     ) -> Self {
         let model = Model {
             obj,

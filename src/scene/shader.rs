@@ -1,10 +1,7 @@
-use std::f32::consts::PI;
-
-// @TODO no culling at the momement, drawing every face, maybe worth fixing.
-use super::util::{Model, to_hom_point, from_hom_point, to_hom_vector, from_hom_vector, color_blend};
+use super::util::{Model, color_blend};
 
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matrix2x3, Rotation3};
+use na::{point, Point3, vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matrix2x3, Rotation3};
 
 /// Buffer for passing values between different stages of a pipeline and setting up frame constants
 /// like light direction and transform matrices.
@@ -22,8 +19,9 @@ pub struct Buffer {
     pub t_light_direction: Vector3<f32>,   // Light direction with model and view transformations applied.
     pub vpmv_matrix:       Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
     pub i_vpmv_matrix:     Matrix4<f32>,   // Needed for the shadow shader.
-    pub mv_matrix:         Matrix4<f32>,   // Applied to light direction.
-    pub it_mv_matrix:      Matrix4<f32>,   // Applied to model normals.
+    pub m_matrix:          Matrix4<f32>,   // Applied to light direction.
+    pub i_m_matrix:        Matrix4<f32>,   // Applied to transformed light direction.
+    pub it_m_matrix:       Matrix4<f32>,   // Applied to model normals.
     pub shadow_matrix:     Matrix4<f32>,   // Transform from frame-buffer to shadow buffer coords.
     // Local buffer for passing values between vertex and fragment parts of the pipeline.    
     vertex_intensities:    Vector3<f32>,   // Light intensity in each vertex of a polygon.
@@ -49,7 +47,7 @@ impl Buffer {
     }
 }
 
-/// Type representing a funtion, which is called in order to prepare pipeline for application of vertex
+/// Type representing a function, which is called in order to prepare pipeline for application of vertex
 /// and fragment shaders.
 type Prepare = dyn Fn(
     &mut Buffer,    // Buffer.
@@ -93,7 +91,7 @@ pub struct ShaderPipeline {
 }
 
 /// Simple backface culling.
-fn should_cull_face(vertex_positions: [Vector3<f32>; 3], camera_direction: Vector3<f32>) -> bool {
+fn should_cull_face(vertex_positions: [Point3<f32>; 3], camera_direction: Vector3<f32>) -> bool {
     let face_normal = (vertex_positions[1] - vertex_positions[0]).cross(
         &(vertex_positions[2] - vertex_positions[0])
     );
@@ -105,8 +103,8 @@ fn should_cull_face(vertex_positions: [Vector3<f32>; 3], camera_direction: Vecto
 }
 
 /// Boilerplate for accessing vertex positions from model vertex list.
-fn get_vertex_positions(model: &Model, indices: Vector3<usize>) -> [Vector3<f32>; 3] {
-    let mut vertex_positions = [vector![0.0, 0.0, 0.0]; 3];
+fn get_vertex_positions(model: &Model, indices: Vector3<usize>) -> [Point3<f32>; 3] {
+    let mut vertex_positions = [point![0.0, 0.0, 0.0]; 3];
     for i in 0..3 {
         vertex_positions[i] = model.get_vertex_position_at_index(indices[i]);
     }
@@ -132,15 +130,15 @@ fn store_vertex_uvs(
 
 /// Boilerplate for transforming and moving vertex information, namely screen coords and z-values into buffers.
 fn store_vertex_transformation_results(
-    vertex_positions: [Vector3<f32>; 3],
+    vertex_positions: [Point3<f32>; 3],
     vpmv_matrix:      Matrix4<f32>,
     t_coords_buffer:  &mut Matrix2x3<i32>, 
     z_values_buffer:  &mut Vector3<f32>
 ) {
     for i in 0..3 {
-        let vertex_t_position = from_hom_point(
-            vpmv_matrix * to_hom_point(vertex_positions[i])
-        );
+        let vertex_t_position = Point3::from_homogeneous(
+            vpmv_matrix * vertex_positions[i].to_homogeneous()
+        ).unwrap();
         t_coords_buffer.set_column(
             i,
             &vector![
@@ -168,10 +166,10 @@ fn process_z_value(buffer: &mut Buffer, bar_coord: Vector3<f32>, coord: Vector2<
 }
 
 impl ShaderPipeline {
-    pub fn new(pipeline_name: &str, width: u32, height: u32) -> Self {
-        let buffer =        Buffer::new(width, height);
-        let passes:         Vec<ShaderPass>;
-        match pipeline_name {
+    pub fn new(pipeline_name: String, width: u32, height: u32) -> Self {
+        let buffer = Buffer::new(width, height);
+        let passes: Vec<ShaderPass>;
+        match pipeline_name.as_str() {
             "default"      => passes = get_default_pipeline_passes(),
             "phong"        => passes = get_phong_pipeline_passes(),
             "normal_map"   => passes = get_normal_map_pipeline_passes(),
@@ -234,13 +232,13 @@ fn default_prepare(
                          projection_matrix * 
                          model_matrix * 
                          view_matrix;
-    // Not interested in projection and rasterization, when transformaing light direction and normals.
-    buffer.mv_matrix = model_matrix * view_matrix;
-    buffer.it_mv_matrix = (model_matrix * view_matrix).transpose().try_inverse().unwrap();
+    // Not interested in translation, projection and rasterization, when transformaing light direction and normals.
+    buffer.m_matrix = model_matrix;
+    buffer.it_m_matrix = (model_matrix).transpose().try_inverse().unwrap();
     buffer.camera_direction = new_z;   
-    buffer.t_light_direction = from_hom_vector(
-        buffer.mv_matrix * to_hom_vector(light_direction)
-    ).normalize();
+    buffer.t_light_direction = Vector3::from_homogeneous(
+        buffer.m_matrix * light_direction.to_homogeneous()
+    ).unwrap().normalize();
 }
 
 /// Pipeline preparation for the pass, where we want to get depth information as if our camera was placed at
@@ -273,6 +271,7 @@ fn shadow_pass_prepare_2(
 ) {
     default_prepare(buffer, width, height, light_direction, look_from, look_at, up);
     buffer.i_vpmv_matrix = buffer.vpmv_matrix.try_inverse().unwrap();
+    buffer.i_m_matrix = buffer.m_matrix.try_inverse().unwrap();
 }
 
 /// Calculating diffuse coefficient based on the face normal and light direction.
@@ -293,9 +292,9 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
         let face_normal = (vertex_positions[1] - vertex_positions[0]).cross(
             &(vertex_positions[2] - vertex_positions[0])
         );
-        let t_face_normal = from_hom_vector(
-            buffer.it_mv_matrix * to_hom_vector(face_normal)
-        ).normalize();
+        let t_face_normal = Vector3::from_homogeneous(
+            buffer.it_m_matrix * face_normal.to_homogeneous()
+        ).unwrap().normalize();
         let diff_coef = buffer.t_light_direction.dot(&t_face_normal);
         buffer.vertex_intensities = vector![diff_coef, diff_coef, diff_coef];
 
@@ -356,9 +355,9 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
                 model.obj.normals[normal_indices[i]].1,
                 model.obj.normals[normal_indices[i]].2
             ];
-            let vertex_t_normal = from_hom_vector(
-                buffer.it_mv_matrix * to_hom_vector(vertex_normal)
-            ).normalize();
+            let vertex_t_normal = Vector3::from_homogeneous(
+                buffer.it_m_matrix * vertex_normal.to_homogeneous()
+            ).unwrap().normalize();
             buffer.vertex_intensities[i] = buffer.t_light_direction.dot(
                 &vertex_t_normal
             );
@@ -434,9 +433,9 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
-        let t_fragment_normal = from_hom_vector(
-            buffer.it_mv_matrix * to_hom_vector(fragment_normal)
-        ).normalize();
+        let t_fragment_normal = Vector3::from_homogeneous(
+            buffer.it_m_matrix * fragment_normal.to_homogeneous()
+        ).unwrap().normalize();
         let diff_coef = buffer.t_light_direction.dot(&t_fragment_normal);
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
@@ -488,9 +487,9 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal = model.get_normal_at_uv(uv);
-        let t_fragment_normal = from_hom_vector(
-            buffer.it_mv_matrix * to_hom_vector(fragment_normal)
-        ).normalize();
+        let t_fragment_normal = Vector3::from_homogeneous(
+            buffer.it_m_matrix * fragment_normal.to_homogeneous()
+        ).unwrap().normalize();
         // Calculated reflection direction, immediately in a new camera frame.
         let reflected_t_light_direction = (
             2.0 * (
@@ -536,9 +535,9 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
         
         // Collecting transformed vertex positions in a buffer to use in local basis calculation.
         for i in 0..3 {
-            buffer.vertex_t_positions.set_column(i, &from_hom_point(
-                    buffer.mv_matrix * to_hom_point(vertex_positions[i])
-                )
+            buffer.vertex_t_positions.set_column(i, &Point3::from_homogeneous(
+                    buffer.m_matrix * vertex_positions[i].to_homogeneous()
+                ).unwrap().coords
             );
         }
 
@@ -550,9 +549,9 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
                 model.obj.normals[normal_indices[i]].1,
                 model.obj.normals[normal_indices[i]].2
             ];
-            let vertex_t_normal = from_hom_vector(
-                buffer.it_mv_matrix * to_hom_vector(vertex_normal)
-            ).normalize();
+            let vertex_t_normal = Vector3::from_homogeneous(
+                buffer.it_m_matrix * vertex_normal.to_homogeneous()
+            ).unwrap().normalize();
             buffer.vertex_t_normals.set_column(i, &vertex_t_normal);
         }
         
@@ -687,9 +686,9 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
                 model.obj.normals[normal_indices[i]].1,
                 model.obj.normals[normal_indices[i]].2
             ];
-            let vertex_t_normal = from_hom_vector(
-                buffer.it_mv_matrix * to_hom_vector(vertex_normal)
-            ).normalize();
+            let vertex_t_normal = Vector3::from_homogeneous(
+                buffer.it_m_matrix * vertex_normal.to_homogeneous()
+            ).unwrap().normalize();
             buffer.vertex_intensities[i] = buffer.t_light_direction.dot(
                 &vertex_t_normal
             );
@@ -717,15 +716,14 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         // Accounting for the shadow - finding the current fragment in the shadow buffer and looking at its
         // z-value there - if it is larger than the z-value, that we got from current transform, it means, 
         // that our fragment is in the shadow, so we need to dim the color.        
-        let shadow_coord = from_hom_point(
-            buffer.shadow_matrix * buffer.i_vpmv_matrix * to_hom_point(
-                vector![
-                    coord.x as f32,
-                    coord.y as f32,
-                    bar_coord.dot(&buffer.vertex_z_values)
-                ]
-            )
-        );
+        let shadow_coord = Point3::from_homogeneous(
+            buffer.shadow_matrix * buffer.i_vpmv_matrix * 
+            point![
+                coord.x as f32,
+                coord.y as f32,
+                bar_coord.dot(&buffer.vertex_z_values)
+            ].to_homogeneous()
+        ).unwrap();
         // Very importnat to cast shadow_coord to u32 as opposed to buffer.width to f32!
         let shadow_index = (
             shadow_coord.x.round() as u32 + 
@@ -831,28 +829,26 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
     | -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
 
-        let light_direction = from_hom_vector(
-            buffer.i_vpmv_matrix * to_hom_vector(buffer.t_light_direction)
-        );
+        let light_direction = Vector3::from_homogeneous(
+            buffer.i_m_matrix * buffer.t_light_direction.to_homogeneous()
+        ).unwrap();
         // Finding position of the fragment in the global coordinates first.  
-        let fragment_world_position = from_hom_point(
-            buffer.i_vpmv_matrix * to_hom_point(
-                vector![
-                    coord.x as f32,
-                    coord.y as f32,
-                    bar_coord.dot(&buffer.vertex_z_values)
-                ]
-            )
-        );
-        let fragment_shadow_coord = from_hom_point(
-            buffer.shadow_matrix * buffer.i_vpmv_matrix * to_hom_point(
-                vector![
-                    coord.x as f32,
-                    coord.y as f32,
-                    bar_coord.dot(&buffer.vertex_z_values)
-                ]
-            )
-        );
+        let fragment_world_position = Point3::from_homogeneous(
+            buffer.i_vpmv_matrix * 
+            point![
+                coord.x as f32,
+                coord.y as f32,
+                bar_coord.dot(&buffer.vertex_z_values)
+            ].to_homogeneous()
+        ).unwrap();
+        let fragment_shadow_coord = Point3::from_homogeneous(
+            buffer.shadow_matrix * buffer.i_vpmv_matrix * 
+            point![
+                coord.x as f32,
+                coord.y as f32,
+                bar_coord.dot(&buffer.vertex_z_values)
+            ].to_homogeneous()
+        ).unwrap();
         let fragment_shadow_index = (
             fragment_shadow_coord.x.round() as u32 + 
             (fragment_shadow_coord.y.round() as u32) * buffer.width
@@ -861,7 +857,7 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
 
         // Sampling 16 points around the fragment uniformly in the plane perpendicular to the light direction. 
         // Each sample is transformed to shadow buffer coordinates in order to check occlusion.
-        let threshold = 5.0; // Occluding the point only if it is this deep relative to the neighbours.
+        let threshold = 1.0; // Occluding the point only if it is this deep relative to the neighbours.
         let mut occlusion_coef = 1.0;
         let number_of_samples = 16;
         let step_size = 0.02; // Distance of the step from the fragment.
@@ -874,21 +870,22 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
             let global_step_dir = vector![(angle_coef * i as f32).sin(), 0.0, (angle_coef * i as f32).cos()];
             let step_dir = rot * global_step_dir;
             let sample = fragment_world_position + step_dir * step_size;
-            let shadow_coord = from_hom_point(
-                buffer.shadow_matrix * to_hom_point(sample)
-            );
-            let shadow_index = (
-                shadow_coord.x.round() as u32 + 
-                (shadow_coord.y.round() as u32) * buffer.width
+            let sample_shadow_coord = Point3::from_homogeneous(
+                buffer.shadow_matrix * sample.to_homogeneous()
+            ).unwrap();
+            let sample_shadow_index = (
+                sample_shadow_coord.x.round() as u32 + 
+                (sample_shadow_coord.y.round() as u32) * buffer.width
             ) as usize;
-            if buffer.shadow_buffer[shadow_index] - threshold > fragment_shadow_value {
-                let mut occlusion_strength = (buffer.shadow_buffer[shadow_index] - fragment_shadow_value) / 20.0;
+            if buffer.shadow_buffer[sample_shadow_index] - threshold > fragment_shadow_value {
+                let mut occlusion_strength = (
+                    buffer.shadow_buffer[sample_shadow_index] - fragment_shadow_value
+                ) / 20.0;
                 occlusion_strength = occlusion_strength.min(1.0);
                 occlusion_coef -= (1.0 / (number_of_samples as f32)) * occlusion_strength;
             }
         }        
 
-        // occlusion_coef = occlusion_coef.powf(0.5);
         buffer.fragment_color = color_blend(vector![255, 255, 255], vector![0, 0, 0], occlusion_coef);
 
         return true;

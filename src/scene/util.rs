@@ -1,28 +1,7 @@
 use obj::raw::RawObj;
 use image::RgbImage;
 use nalgebra as na;
-use na::{vector, Vector2, Vector3, Vector4};
-
-// @TODO remove double definition.
-/// Transformation of a point to homogenous coordinates.
-pub fn to_hom_point(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 1.0];
-}
-
-/// Transformation of a vector to homogenous coordinates.
-pub fn to_hom_vector(v: Vector3<f32>) -> Vector4<f32> {
-    return vector![v.x, v.y, v.z, 0.0];
-}
-
-/// Transformation of a point from homogenous coordinates.
-pub fn from_hom_point(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x / v.w, v.y / v.w, v.z / v.w];
-}
-
-/// Transformation of a vector from homogenous coordinates.
-pub fn from_hom_vector(v: Vector4<f32>) -> Vector3<f32> {
-    return vector![v.x, v.y, v.z];
-}
+use na::{point, Point3, vector, Vector2, Vector3};
 
 /// Utility for getting convex combination of 2 Vector3<u8>'s
 pub fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
@@ -43,8 +22,8 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn get_vertex_position_at_index(&self, index: usize) -> Vector3<f32> {
-        return vector![
+    pub fn get_vertex_position_at_index(&self, index: usize) -> Point3<f32> {
+        return point![
             self.obj.positions[index].0,
             self.obj.positions[index].1,
             self.obj.positions[index].2
@@ -93,7 +72,7 @@ impl Model {
         ].normalize();
     }
 
-    /// Returns a [0, 1] from specular mpa at uv.
+    /// Returns value in [0, 1] from specular map at uv.
     pub fn get_specular_value_at_uv(&self, uv: Vector2<f32>) -> f32 {
         let coord = vector![
             (uv.x * self.specular_map.width() as f32) as u32,
