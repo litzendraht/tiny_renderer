@@ -30,11 +30,6 @@ pub struct Params {
 }
 
 struct FrameActionBuffer {
-    // 0 - CameraLeft
-    // 1 - CameraRight
-    // 2 - LightLeft
-    // 3 - LightRight
-    // 4 - Exit
     pub actions: HashMap<Action, bool>,
 }
 
@@ -139,27 +134,14 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
     // Variables for convenience.
     let mut camera_angle: f32 = 0.0;
     let mut light_direction_angle: f32 = 0.0;
-    // Initial camera and light setup.
-    let mut look_from = vector![camera_angle.sin(), 0.0, camera_angle.cos()];
-    let look_at       = vector![0.0, 0.0, 0.0];
-    let up            = vector![0.0, 1.0, 0.0];
-    // Direction is FROM surface TO source, so negative of true direction.
-    // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
-    // Easier to think of this as light source position on a unit sphere.
-    let mut light_direction = vector![light_direction_angle.sin(), 0.0, light_direction_angle.cos()];
     // Stats.
     let mut exit = false;
-    let time_begin = time::Instant::now();
     let mut frame_counter_time_begin = time::Instant::now();
     let mut frame_counter: u32 = 0;
     let mut frame_begin_time;
     let mut frame_time = 0.0;
     while !exit {
         frame_begin_time = time::Instant::now();
-
-        let passed_time = time::Instant::now()
-        .duration_since(time_begin)
-        .as_secs_f32();
 
         // Clearing z-buffer and resetting rendered data to (0, 0, 0).
         scene.clear();        
@@ -171,14 +153,19 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         if *frame_action_buffer.actions.get(&Action::CameraLeft).unwrap() {
             camera_angle -= CAMERA_SPEED * frame_time;
         }
+        // Direction is FROM surface TO source, so negative of true direction.
+        // This simplifies math inside shaders somewhat by removing the need to place minus at some critical spots.
+        // Easier to think of this as light source position on a unit sphere.
         if *frame_action_buffer.actions.get(&Action::LightRight).unwrap() {
             light_direction_angle += LIGHT_SOURCE_SPEED * frame_time;
         }
         if *frame_action_buffer.actions.get(&Action::LightLeft).unwrap() {
             light_direction_angle -= LIGHT_SOURCE_SPEED * frame_time;
         }
-        look_from = vector![camera_angle.sin(), 0.0, camera_angle.cos()];
-        light_direction = vector![light_direction_angle.sin(), 0.0, light_direction_angle.cos()];
+        let look_from       = vector![camera_angle.sin(), 0.0, camera_angle.cos()];
+        let look_at         = vector![0.0, 0.0, 0.0];
+        let up              = vector![0.0, 1.0, 0.0];        
+        let light_direction = vector![light_direction_angle.sin(), 0.0, light_direction_angle.cos()];
         scene.set_light_direction(light_direction);
         scene.set_camera(look_from, look_at, up);
         scene.render();

@@ -1,3 +1,6 @@
+// @TODO similarly to shader.rs crate, this crate, which is closely coupled to it is also hot garbage,
+// requiring some refactoring.
+
 mod util;
 use util::Model;
 pub mod shader;
@@ -204,7 +207,6 @@ impl Scene
                 // Indices are &Vec((usize, usize, usize)), where first item corresponds to indices for
                 // positions, second to indices for texture uv coords and third to indices for normals
                 // which results in a bloated call to vertex shader.
-                // @TODO make it not bloated.
                 let indices: &Vec<(usize, usize, usize)> = match polygon {
                     Polygon::PTN(indices) => &indices,
                     _ => panic!("Encountered some garbage, while looking through polygons."),

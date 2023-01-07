@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params = app::Params {
         width: WIDTH,
         height: HEIGHT,
-        print_fps: false,
+        print_fps: true,
         asset_path,
         shader_pipeline_name,
     };

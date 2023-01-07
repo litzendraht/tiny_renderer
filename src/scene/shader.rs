@@ -1,3 +1,8 @@
+// @TODO this crate is hot garbage - I wanted to have the ability to have different shaders with variable
+// requirements to the buffer contents and different number of passes which created bloat in the buffer,
+// vector of closures in the ShaderPipeline struct, some questonable separation of data and not so pretty
+// function signatures. Improvements surely can be made here.
+
 use super::util::{Model, color_blend};
 
 use nalgebra as na;
@@ -5,8 +10,6 @@ use na::{point, Point3, vector, Vector2, Vector3, matrix, Matrix3, Matrix4, Matr
 
 /// Buffer for passing values between different stages of a pipeline and setting up frame constants
 /// like light direction and transform matrices.
-// @TODO not all buffer is used in every shader, but for simplicity it just has all options. Maybe
-// worth thinking about how to get a more fine-grained buffer structure for each shader.
 #[derive(Default)]
 pub struct Buffer {
     pub width:             u32,            // Width of the frame buffer.
@@ -28,10 +31,10 @@ pub struct Buffer {
     vertex_t_positions:    Matrix3<f32>,   // Transformed vertex positions as columns.
     vertex_t_normals:      Matrix3<f32>,   // Transformed vertex normals at each vertex as columns.
     vertex_uvs:            Matrix2x3<f32>, // UV coordinates, defining where to look for a color of a vertex as columns.
-    pub vertex_t_raster:   Matrix2x3<i32>, // Coordinates after all transformation, including viewport as columns.
+    pub vertex_t_raster:   Matrix2x3<i32>, // x, y coordinates after all transformation, including viewport as columns.
     pub vertex_z_values:   Vector3<f32>,   // Value used for comparison with existing z-buffer values.
     // Access to color after application of fragment shader.
-    pub fragment_color:    Vector3<u8> 
+    pub fragment_color:    Vector3<u8>,    // Final output for a fragment.
 }
 
 impl Buffer {
@@ -72,8 +75,8 @@ type VertexShader = dyn Fn(
 type FragmentShader = dyn Fn(
     &mut Buffer,    // Buffer
     &Model,         // Model info.
-    Vector2<u32>,    // Coordinates of the fragment in the frame buffer.
-    Vector3<f32>   // Barycentric coordinates.
+    Vector2<u32>,   // Coordinates of the fragment in the frame buffer.
+    Vector3<f32>    // Barycentric coordinates.
 ) -> bool;
 
 /// Representation of one pass in the shader pipeline storing closures, representing a 3 steps - 
@@ -88,6 +91,28 @@ pub struct ShaderPass {
 pub struct ShaderPipeline {
     pub buffer: Buffer,
     pub passes: Vec<ShaderPass>
+}
+
+impl ShaderPipeline {
+    pub fn new(pipeline_name: String, width: u32, height: u32) -> Self {
+        let buffer = Buffer::new(width, height);
+        let passes: Vec<ShaderPass>;
+        match pipeline_name.as_str() {
+            "default"      => passes = get_default_pipeline_passes(),
+            "phong"        => passes = get_phong_pipeline_passes(),
+            "normal_map"   => passes = get_normal_map_pipeline_passes(),
+            "specular"     => passes = get_specular_pipeline_passes(),
+            "darboux"      => passes = get_darboux_pipeline_passes(),
+            "shadow"       => passes = get_shadow_pipeline_passes(),
+            "occlusion"    => passes = get_occlusion_pipeline_passes(),
+            _ => panic!("Provided pipeline name is not supported!"),
+        }
+
+        return Self {
+            buffer,
+            passes,
+        };
+    }
 }
 
 /// Simple backface culling.
@@ -165,28 +190,6 @@ fn process_z_value(buffer: &mut Buffer, bar_coord: Vector3<f32>, coord: Vector2<
     return true;
 }
 
-impl ShaderPipeline {
-    pub fn new(pipeline_name: String, width: u32, height: u32) -> Self {
-        let buffer = Buffer::new(width, height);
-        let passes: Vec<ShaderPass>;
-        match pipeline_name.as_str() {
-            "default"      => passes = get_default_pipeline_passes(),
-            "phong"        => passes = get_phong_pipeline_passes(),
-            "normal_map"   => passes = get_normal_map_pipeline_passes(),
-            "specular"     => passes = get_specular_pipeline_passes(),
-            "darboux"      => passes = get_darboux_pipeline_passes(),
-            "shadow"       => passes = get_shadow_pipeline_passes(),
-            "occlusion"    => passes = get_occlusion_pipeline_passes(),
-            _ => panic!("Provided pipeline name is not supported!"),
-        }
-
-        return Self {
-            buffer,
-            passes,
-        };
-    }
-}
-
 /// Standard setup which prepares transforms to the basis relative to the camera.
 fn default_prepare(
     buffer:          &mut Buffer,
@@ -209,8 +212,6 @@ fn default_prepare(
                               0.0, 1.0, 0.0, -look_from.y;
                               0.0, 0.0, 1.0, -look_from.z;
                               0.0, 0.0, 0.0, 1.0];
-    // @TODO figure out, how this actually works, OpenGL tutorials immediately give more complicated camera
-    // with fov, near/far clipping planes, etc. For now I just know, that dividing by 5.0 works ok.
     let coef = -1.0 / 5.0;
     let projection_matrix = matrix![1.0, 0.0, 0.0,  0.0;
                                     0.0, 1.0, 0.0,  0.0;
@@ -248,7 +249,7 @@ fn shadow_pass_prepare_1(
     width:           u32,
     height:          u32,
     light_direction: Vector3<f32>,
-    look_from:       Vector3<f32>,
+    _look_from:      Vector3<f32>,
     look_at:         Vector3<f32>,
     up:              Vector3<f32>        
 ) {
