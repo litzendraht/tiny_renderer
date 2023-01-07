@@ -42,6 +42,7 @@ Doesn't work too well for the diablo model for some reason, so here is the afric
 ![image](https://user-images.githubusercontent.com/17012740/211145711-75b00d53-98d5-4d8c-81f9-ad91de8c629d.png)
 
 ## Shading by using normals in tangent basis
+Notice how tail and right hand are correctly shaded in comparison to normal map based shading. 
 ![image](https://user-images.githubusercontent.com/17012740/211145781-24c2a16d-9155-4c2a-b72d-98e0e1d4e504.png)
 
 ## Hard shadows + Phong shading
