@@ -17,7 +17,7 @@ pub struct Buffer {
     // Pointers to some fat buffers like z-buffer and shadow buffer.    
     pub z_buffer:          Vec<f32>,
     pub shadow_buffer:     Vec<f32>,
-    // Small stuff.
+    // A collection of various uniforms.
     pub camera_direction:  Vector3<f32>,
     pub t_light_direction: Vector3<f32>,   // Light direction with model and view transformations applied.
     pub vpmv_matrix:       Matrix4<f32>,   // Applied to vertices to get final screen coodrdinates.
@@ -279,13 +279,13 @@ fn shadow_pass_prepare_2(
 fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
 
@@ -308,14 +308,14 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>,
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
@@ -323,7 +323,7 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass {
         prepare:  Box::new(default_prepare),
@@ -339,13 +339,13 @@ fn get_default_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
 
@@ -373,14 +373,14 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>,
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord;
         let color = model.get_color_at_uv(uv);
@@ -388,7 +388,7 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass { 
         prepare:  Box::new(default_prepare),
@@ -403,13 +403,13 @@ fn get_phong_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
@@ -422,14 +422,14 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
@@ -441,7 +441,7 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass { 
         prepare:  Box::new(default_prepare),
@@ -457,13 +457,13 @@ fn get_normal_map_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
@@ -476,14 +476,14 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
@@ -509,7 +509,7 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = corrected_color;
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass { 
         prepare:  Box::new(default_prepare),
@@ -524,13 +524,13 @@ fn get_specular_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
         
@@ -565,20 +565,19 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
         let uv = buffer.vertex_uvs * bar_coord; 
         let color = model.get_color_at_uv(uv);
         let fragment_normal_tangent = model.get_normal_tangent_at_uv(uv);
         // Calculating the matrix, giving required transformation from Darboux basis to the global one.
-        // A is a matrix with rows representing a local basis at each fragment.
         let mut local_basis_matrix: Matrix3<f32> = Default::default();
         let local_z = buffer.vertex_t_normals * bar_coord;
         local_basis_matrix.set_row(
@@ -613,7 +612,7 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef);
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass { 
         prepare:  Box::new(default_prepare),
@@ -629,13 +628,13 @@ fn get_darboux_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         // No culling on this pass, since cull decisions for the real camera can be different.
         // Also no other operations except for position transformation and uv calculation - we
@@ -650,14 +649,14 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
 
         // Returning true so shadow buffer is updated with z-values from all fragments.
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         // Filling shadow buffer.
         let index = (coord.x + coord.y * buffer.width) as usize;
         let z_value = bar_coord.dot(&buffer.vertex_z_values);
@@ -667,15 +666,15 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         
         // Don't need to draw anything to the final frame buffer on this pass, so just returning false. 
         return false;
-    };
+    }
 
-    let vertex_pass_2 = |
+    fn vertex_pass_2(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         // Phong vertex shader.
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }
@@ -704,14 +703,14 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_2 = |
+    fn fragment_pass_2(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
 
         // Accounting for the shadow - finding the current fragment in the shadow buffer and looking at its
@@ -740,7 +739,7 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(color, vector![0, 0, 0], diff_coef * shadow_coef);
 
         return true;
-    };
+    }
 
     passes.push(ShaderPass { 
         prepare:  Box::new(shadow_pass_prepare_1),
@@ -761,13 +760,13 @@ fn get_shadow_pipeline_passes() -> Vec::<ShaderPass> {
 fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
     let mut passes = Vec::<ShaderPass>::new();
 
-    let vertex_pass_1 = |
+    fn vertex_pass_1(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         let vertex_positions = get_vertex_positions(model, pos_indices);
         // No culling on this pass, since cull decisions for the real camera can be different.
         // Also no other operations except for position transformation and uv calculation - we
@@ -782,14 +781,14 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
 
         // Returning true so shadow buffer is updated with z-values from all fragments.
         return true;
-    };
+    }
 
-    let fragment_pass_1 = |
+    fn fragment_pass_1(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         // Filling shadow buffer.
         let index = (coord.x + coord.y * buffer.width) as usize;
         let z_value = bar_coord.dot(&buffer.vertex_z_values);
@@ -799,15 +798,15 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
         
         // Don't need to draw anything to the final frame buffer on this pass, so just returning false. 
         return false;
-    };
+    }
 
-    let vertex_pass_2 = |
+    fn vertex_pass_2(
         buffer:         &mut Buffer,
         model:          &Model,
         pos_indices:    Vector3<usize>,
         tex_indices:    Vector3<usize>,
         normal_indices: Vector3<usize>
-    | -> bool {
+    ) -> bool {
         // Phong vertex shader.
         let vertex_positions = get_vertex_positions(model, pos_indices);
         if should_cull_face(vertex_positions, buffer.camera_direction) { return false; }        
@@ -820,14 +819,14 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
         store_vertex_uvs(&mut buffer.vertex_uvs, &model.obj.tex_coords, tex_indices);
 
         return true;
-    };
+    }
 
-    let fragment_pass_2 = |
+    fn fragment_pass_2(
         buffer:    &mut Buffer,
         model:     &Model,
         coord:     Vector2<u32>,
         bar_coord: Vector3<f32>
-    | -> bool {
+    ) -> bool {
         if !process_z_value(buffer, bar_coord, coord) { return false; }
 
         let light_direction = Vector3::from_homogeneous(
@@ -842,6 +841,7 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
                 bar_coord.dot(&buffer.vertex_z_values)
             ].to_homogeneous()
         ).unwrap();
+        // Finding a point in the shadow buffer, which corresponds to the current fragment.
         let fragment_shadow_coord = Point3::from_homogeneous(
             buffer.shadow_matrix * buffer.i_vpmv_matrix * 
             point![
@@ -890,9 +890,9 @@ fn get_occlusion_pipeline_passes() -> Vec::<ShaderPass> {
         buffer.fragment_color = color_blend(vector![255, 255, 255], vector![0, 0, 0], occlusion_coef);
 
         return true;
-    };
+    }
 
-    // Preparation for the occlusion passes is the same as for shadow passes, wince we need the same
+    // Preparation for the occlusion passes is the same as for shadow passes, since we need the same
     // shadow buffer and a way to transform to shadow buffer coordinates.
     passes.push(ShaderPass { 
         prepare:  Box::new(shadow_pass_prepare_1),

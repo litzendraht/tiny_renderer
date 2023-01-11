@@ -8,3 +8,7 @@ nalgebra = "0.31.4"
 image = "0.24.5"
 show-image = "0.13.1"
 obj-rs = "0.7.0"
+threadpool = "1.8.1"
+
+[profile.release] 
+debug = true

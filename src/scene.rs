@@ -2,17 +2,19 @@
 // requiring some refactoring.
 
 mod util;
-use util::Model;
-pub mod shader;
-pub use self::shader::ShaderPipeline;
+mod shader;
 
-use std::cmp::{min, max};
+use util::Model;
+use self::shader::ShaderPipeline;
+
+use std::{cmp::{min, max}, thread::available_parallelism};
 
 use obj::raw::RawObj;
 use obj::raw::object::Polygon;
 use image::{ImageBuffer, Rgb, RgbImage};
 use nalgebra as na;
 use na::{vector, Vector2, Vector3, Matrix2x3};
+use threadpool::ThreadPool;
 
 /// Scene, holding its width, height and private flat array(vec) of pixel data,
 /// showing the rendered image.
@@ -33,6 +35,8 @@ pub struct Scene
     depth_data:      Vec<u8>,
     // Storing flat array.
     frame_buffer:    Vec<u8>,
+    // Threadpool for multi-threaded fragment shader execution.
+    thread_pool:     ThreadPool,
     
 }
 
@@ -65,6 +69,9 @@ impl Scene
         let up              = vector![0.0, 1.0, 0.0];
         let depth_data:   Vec<u8> = vec![0; 3 * frame_buffer_size];
         let frame_buffer: Vec<u8> = vec![0; 3 * frame_buffer_size];
+        let n_threads = available_parallelism().unwrap().get();
+        println!("scene is creating thread pool with {} threads", n_threads);
+        let thread_pool     = ThreadPool::new(n_threads);
         return Scene {
             width,
             height,
@@ -76,6 +83,7 @@ impl Scene
             up,
             depth_data,
             frame_buffer,
+            thread_pool,
         }
     }
     
@@ -151,7 +159,7 @@ impl Scene
             ur: Vector2<i32>, // upper right corner
         }
 
-        // Helper used to find bounding box of a triangle.
+        // Helper used to find bounding box of a triangle. Can reach outside of the screen.
         fn get_triangle_bounding_box(coords: Matrix2x3<i32>) -> BoundingBox {
             return BoundingBox {
                 ll: vector![
@@ -227,9 +235,12 @@ impl Scene
                 let bbox = get_triangle_bounding_box(vertex_t_raster);
 
                 // Accounting for possibility that bbox can reach outside of the screen.
-                for i in max(0, bbox.ll.x)..=min(bbox.ur.x, (self.width - 1) as i32) {
-                    for j in max(0, bbox.ll.y)..=min(bbox.ur.y, (self.height - 1) as i32) {
-                        let pixel_index = (i + j * self.width as i32) as usize;
+                let x_min = max(0, bbox.ll.x);
+                let x_max = min(bbox.ur.x, (self.width - 1) as i32);
+                let y_min = max(0, bbox.ll.y);
+                let y_max = min(bbox.ur.y, (self.height - 1) as i32);
+                for i in x_min..=x_max {
+                    for j in y_min..=y_max {
                         let bar_coord = to_barycentric_coord(
                             vector![i, j], 
                             vertex_t_raster
@@ -251,6 +262,7 @@ impl Scene
                             continue;
                         }
                         let fragment_color = self.shader_pipeline.buffer.fragment_color;
+                        let pixel_index = (i + j * self.width as i32) as usize;
                         self.frame_buffer[3 * pixel_index + 0] = fragment_color.x;
                         self.frame_buffer[3 * pixel_index + 1] = fragment_color.y;
                         self.frame_buffer[3 * pixel_index + 2] = fragment_color.z;

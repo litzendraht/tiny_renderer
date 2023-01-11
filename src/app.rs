@@ -29,6 +29,7 @@ pub struct Params {
     pub shader_pipeline_name: String,
 }
 
+/// Buffer for storing previous frame's events of interets.
 struct FrameActionBuffer {
     pub actions: HashMap<Action, bool>,
 }
@@ -83,34 +84,34 @@ impl FrameActionBuffer {
 /// Actualy launches the window, showing images.
 /// Takes struct, defining execution params.
 pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {   
-    let obj_path = params.asset_path.clone() + "/model.obj";
-    let texture_path = params.asset_path.clone() + "/texture.tga";
-    let normal_map_path = params.asset_path.clone() + "/normal_map.tga";
+    let obj_path                = params.asset_path.clone() + "/model.obj";
+    let texture_path            = params.asset_path.clone() + "/texture.tga";
+    let normal_map_path         = params.asset_path.clone() + "/normal_map.tga";
     let normal_map_tangent_path = params.asset_path.clone() + "/normal_map_tangent.tga";
-    let specular_map_path = params.asset_path.clone() + "/specular_map.tga";
+    let specular_map_path       = params.asset_path.clone() + "/specular_map.tga";
 
-    println!("Loading model from: {}", obj_path);
+    println!("loading model from: {}", obj_path);
     let obj = parse_obj(BufReader::new(File::open(obj_path)?))?;
-    println!("Number of vertices in a model: {}", obj.positions.len());
-    println!("Number of polygons in a model: {}", obj.polygons.len());
+    println!("number of vertices in a model: {}", obj.positions.len());
+    println!("number of polygons in a model: {}", obj.polygons.len());
 
-    println!("Loading texture from: {}", texture_path);
+    println!("loading texture from: {}", texture_path);
     let texture = image::open(texture_path)?.into_rgb8();
-    println!("Dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
+    println!("dimensions of loaded texture are: {} x {}", texture.width(), texture.height());
 
-    println!("Loading normal map from: {}", normal_map_path);
+    println!("loading normal map from: {}", normal_map_path);
     let normal_map = image::open(normal_map_path)?.into_rgb8();
-    println!("Dimensions of loaded normal map are: {} x {}", normal_map.width(), normal_map.height());
+    println!("dimensions of loaded normal map are: {} x {}", normal_map.width(), normal_map.height());
 
-    println!("Loading normal map in tangent coordinates from: {}", normal_map_tangent_path);
+    println!("loading normal map in tangent coordinates from: {}", normal_map_tangent_path);
     let normal_map_tangent = image::open(normal_map_tangent_path)?.into_rgb8();
-    println!("Dimensions of loaded normal map in tangent coordinates are: {} x {}", normal_map.width(), normal_map.height());
+    println!("dimensions of loaded normal map in tangent coordinates are: {} x {}", normal_map.width(), normal_map.height());
 
-    println!("Loading specular map from: {}", specular_map_path);
+    println!("loading specular map from: {}", specular_map_path);
     let specular_map = image::open(specular_map_path)?.into_rgb8();
-    println!("Dimensions of loaded specular map are: {} x {}", specular_map.width(), specular_map.height());
+    println!("dimensions of loaded specular map are: {} x {}", specular_map.width(), specular_map.height());
 
-    println!("Cooking up a scene with '{}' shader pipeline", params.shader_pipeline_name);
+    println!("cooking up a scene with '{}' shader pipeline", params.shader_pipeline_name);
     let mut scene = Scene::new(
         params.width, 
         params.height, 

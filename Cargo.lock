@@ -1753,6 +1753,7 @@ dependencies = [
  "nalgebra",
  "obj-rs",
  "show-image",
+ "threadpool",
 ]
 
 [[package]]
