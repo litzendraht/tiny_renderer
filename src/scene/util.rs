@@ -1,10 +1,10 @@
-use obj::raw::RawObj;
 use image::RgbImage;
+use na::{point, vector, Point3, Vector2, Vector3};
 use nalgebra as na;
-use na::{point, Point3, vector, Vector2, Vector3};
+use obj::raw::RawObj;
 
 /// Utility for getting convex combination of 2 Vector3<u8>'s
-pub fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8>{
+pub fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector3<u8> {
     return vector![
         (t * color_1.x as f32 + (1.0 - t) * color_2.x as f32) as u8,
         (t * color_1.y as f32 + (1.0 - t) * color_2.y as f32) as u8,
@@ -14,11 +14,11 @@ pub fn color_blend(color_1: Vector3<u8>, color_2: Vector3<u8>, t: f32) -> Vector
 
 /// Struct, holding all information about the model, including geometry, texture and normal and specular maps.
 pub struct Model {
-    pub obj:                RawObj,
-    pub texture:            RgbImage,
-    pub normal_map:         RgbImage,
+    pub obj: RawObj,
+    pub texture: RgbImage,
+    pub normal_map: RgbImage,
     pub normal_map_tangent: RgbImage,
-    pub specular_map:       RgbImage,
+    pub specular_map: RgbImage,
 }
 
 impl Model {
@@ -37,9 +37,7 @@ impl Model {
             (uv.y * self.texture.height() as f32) as u32
         ];
 
-        return Vector3::<u8>::from_row_slice(
-            &self.texture.get_pixel(coord.x, coord.y).0[0..3]
-        );
+        return Vector3::<u8>::from_row_slice(&self.texture.get_pixel(coord.x, coord.y).0[0..3]);
     }
 
     /// Returns normalized normal from normal map at uv.
@@ -54,7 +52,8 @@ impl Model {
             (self.normal_map.get_pixel(coord.x, coord.y).0[0]) as f32 / 255.0 - 0.5,
             (self.normal_map.get_pixel(coord.x, coord.y).0[1]) as f32 / 255.0 - 0.5,
             (self.normal_map.get_pixel(coord.x, coord.y).0[2]) as f32 / 255.0 - 0.5
-        ].normalize();
+        ]
+        .normalize();
     }
 
     /// Returns normalized normal from normal map in tangent coordinates at uv.
@@ -69,7 +68,8 @@ impl Model {
             (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[0]) as f32 / 255.0 - 0.5,
             (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[1]) as f32 / 255.0 - 0.5,
             (self.normal_map_tangent.get_pixel(coord.x, coord.y).0[2]) as f32 / 255.0 - 0.5
-        ].normalize();
+        ]
+        .normalize();
     }
 
     /// Returns value in [0, 1] from specular map at uv.

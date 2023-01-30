@@ -1,9 +1,9 @@
-mod scene;
 mod app;
+mod scene;
 
 use std::env;
 
-const WIDTH: u32  = 800;
+const WIDTH: u32 = 800;
 const HEIGHT: u32 = 800;
 
 #[show_image::main]
@@ -15,9 +15,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     for i in 1..args.len() {
         match args[i].as_str() {
-            "-p" => { asset_path = args[i + 1].clone(); }
-            "-s" => { shader_pipeline_name = args[i + 1].clone(); }
-            _ => ()
+            "-p" => {
+                asset_path = args[i + 1].clone();
+            }
+            "-s" => {
+                shader_pipeline_name = args[i + 1].clone();
+            }
+            _ => (),
         }
     }
 
